@@ -10,13 +10,19 @@ from telegram.ext import (
     CommandHandler,
     ContextTypes,
     MessageHandler,
+    CallbackQueryHandler,
     filters,
 )
+
+# Yeni erzaq idareetme modulu
+from basket_ui import show_basket, basket_click
 
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "ingredients.db"
 
+
+# Esas menyu
 MENU = ReplyKeyboardMarkup(
     [
         ["🧺 Ərzaqlarım", "🍽️ Nə bişirim?"],
@@ -57,7 +63,7 @@ def register_user(user_id):
         return result.rowcount == 1
 
 
-# Yalniz hemin istifadecinin erzaqlarini getir
+# Istifadecinin erzaqlarini getir
 def get_ingredients(user_id):
     with sqlite3.connect(DB_PATH) as db:
         rows = db.execute(
@@ -103,9 +109,13 @@ def add_ingredients(user_id, names):
     return added, existing
 
 
-# Start
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# START KOMANDASI
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
     user_id = update.effective_user.id
+
     first_visit = register_user(user_id)
 
     if first_visit:
@@ -118,6 +128,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Ərzaqları əlavə etdikdən sonra "
             "«🍽️ Nə bişirim?» düyməsinə bas."
         )
+
     else:
         count = len(get_ingredients(user_id))
 
@@ -127,10 +138,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"Siyahında {count} ərzaq var.\n"
                 "Ərzaqlarını yeniləyə və ya yemək tapa bilərsən."
             )
+
         else:
             message = (
                 "Yenidən xoş gəldin! 👋\n\n"
-                "Siyahın boşdur. Ərzaq əlavə edərək başlaya bilərsən."
+                "Siyahın boşdur. "
+                "Ərzaq əlavə edərək başlaya bilərsən."
             )
 
     await update.message.reply_text(
@@ -139,7 +152,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# Mesajlari ve menyunu idare et
+# METN MESAJLARI
 async def handle_text(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -149,31 +162,9 @@ async def handle_text(
 
     register_user(user_id)
 
-    # Erzaqlarim
-    if text == "🧺 Ərzaqlarım":
-        items = get_ingredients(user_id)
+    # RESEPT DUYMESI
+    if text == "🍽️ Nə bişirim?":
 
-        if not items:
-            response = (
-                "🧺 Ərzaqlarım\n\n"
-                "Siyahın hələ boşdur.\n\n"
-                "Ərzaqları vergüllə ayıraraq yaz.\n"
-                "Məsələn: Kartof, yumurta, soğan"
-            )
-        else:
-            # Ilk merhelede siyahini metn kimi gosteririk
-            lines = [
-                f"{i}. {name}"
-                for i, name in enumerate(items, 1)
-            ]
-
-            response = (
-                f"🧺 Ərzaqlarım ({len(items)})\n\n"
-                + "\n".join(lines)
-            )
-
-    # Resept duymesi
-    elif text == "🍽️ Nə bişirim?":
         items = get_ingredients(user_id)
 
         if not items:
@@ -181,30 +172,34 @@ async def handle_text(
                 "🧺 Siyahın boşdur.\n\n"
                 "Əvvəlcə evində olan ərzaqları əlavə et."
             )
+
         else:
             response = (
                 "🍽️ Resept sistemi hələ hazırlanır.\n\n"
                 f"Siyahındakı {len(items)} ərzaq yadda saxlanılıb."
             )
 
-    # Komek
+    # KOMEK
     elif text == "ℹ️ Kömək":
+
         response = (
             "ℹ️ Kömək\n\n"
             "Hazırda ərzaqları mətnlə əlavə edə bilərsən.\n\n"
             "Məsələn: Kartof, yumurta, soğan\n\n"
-            "Şəkil, redaktə və resept funksiyaları "
+            "Şəkil və resept funksiyaları "
             "növbəti mərhələlərdə aktivləşdiriləcək."
         )
 
-    # Erzaq elave edilmesi
+    # ERZAQ ELAVE EDILMESI
     else:
+
         # Serbest cumleleri helelik sehv yadda saxlamayaq
         if re.search(
             r"\b(evdə|evde|var|yoxdur|yoxdu|bitib|qalmayıb)\b",
             text,
             re.IGNORECASE,
         ):
+
             await update.message.reply_text(
                 "Hələlik ərzaq adlarını sadə siyahı kimi yaz.\n\n"
                 "Məsələn: Kartof, yumurta, soğan",
@@ -222,6 +217,7 @@ async def handle_text(
         names = []
 
         for part in parts:
+
             name = part.strip(" \t\r\n.!?،؛")
 
             # Meselen: 3 kartof -> kartof
@@ -233,7 +229,7 @@ async def handle_text(
                 flags=re.IGNORECASE,
             ).strip()
 
-            # Yanlis ve cox uzun daxilolmalari kec
+            # Bos ve ya yanlis melumatlari kec
             if not name or len(name) > 50:
                 continue
 
@@ -248,18 +244,25 @@ async def handle_text(
                 names.append(name)
 
         if not names:
+
             response = (
                 "Ərzaq adı müəyyən edə bilmədim.\n\n"
                 "Məsələn: Kartof, yumurta, soğan"
             )
+
         else:
-            added, existing = add_ingredients(user_id, names)
+
+            added, existing = add_ingredients(
+                user_id,
+                names,
+            )
 
             lines = []
 
             if added:
                 lines.append(
-                    "✅ Əlavə olundu:\n" + "\n".join(added)
+                    "✅ Əlavə olundu:\n"
+                    + "\n".join(added)
                 )
 
             if existing:
@@ -282,33 +285,59 @@ async def handle_text(
     )
 
 
-# Sekil funksiyasi helelik hazir deyil
+# SEKIL FUNKSIYASI
 async def handle_photo(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
+
     await update.message.reply_text(
-        "📸 Şəkil tanıma funksiyasını növbəti "
-        "mərhələlərdə aktivləşdirəcəyik.\n\n"
+        "📸 Şəkil tanıma funksiyasını "
+        "növbəti mərhələlərdə aktivləşdirəcəyik.\n\n"
         "Hələlik ərzaqları mətnlə göndər.",
         reply_markup=MENU,
     )
 
 
+# BOTUN ISHE SALINMASI
 def main():
+
     load_dotenv(BASE_DIR / ".env")
 
     token = os.getenv("TELEGRAM_BOT_TOKEN")
 
     if not token:
-        raise RuntimeError("Telegram tokeni tapılmadı!")
+        raise RuntimeError(
+            "Telegram tokeni tapılmadı!"
+        )
 
     init_db()
 
     app = Application.builder().token(token).build()
 
-    app.add_handler(CommandHandler("start", start))
+    # 1. START
+    app.add_handler(
+        CommandHandler("start", start)
+    )
 
+    # 2. ERZAQLARIM INLINE DUYMELERI
+    app.add_handler(
+        CallbackQueryHandler(
+            basket_click,
+            pattern=r"^pantry:",
+        )
+    )
+
+    # 3. ERZAQLARIM ESAS MENYU DUYMESI
+    # Bu handler umumi metn handlerinden evvel olmalidir
+    app.add_handler(
+        MessageHandler(
+            filters.Regex(r"^🧺 Ərzaqlarım$"),
+            show_basket,
+        )
+    )
+
+    # 4. DIGER METN MESAJLARI
     app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
@@ -316,11 +345,17 @@ def main():
         )
     )
 
+    # 5. SEKIL MESAJLARI
     app.add_handler(
-        MessageHandler(filters.PHOTO, handle_photo)
+        MessageHandler(
+            filters.PHOTO,
+            handle_photo,
+        )
     )
 
-    print("Bot işləyir! Dayandırmaq üçün Ctrl+C bas.")
+    print(
+        "Bot işləyir! Dayandırmaq üçün Ctrl+C bas."
+    )
 
     app.run_polling()
 
