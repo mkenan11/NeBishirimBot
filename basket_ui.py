@@ -1,3 +1,4 @@
+import re
 import sqlite3
 from pathlib import Path
 
@@ -22,7 +23,7 @@ def get_rows(user_id):
         ).fetchall()
 
 
-# Siyahinin deyisib-deyismediyini yoxlamaq ucun
+# Siyahinin deyisib-deyismediyini yoxla
 def snapshot(rows):
     return tuple(
         (row[0], row[1], row[2])
@@ -40,7 +41,6 @@ def page_number(page, total):
 def basket_view(user_id, page=0):
     rows = get_rows(user_id)
 
-    # Bos siyahi
     if not rows:
         text = (
             "🧺 Ərzaqlarım\n\n"
@@ -66,9 +66,7 @@ def basket_view(user_id, page=0):
 
         return text, InlineKeyboardMarkup(buttons)
 
-    # Dolu siyahi
     page = page_number(page, len(rows))
-
     start = page * PAGE_SIZE
     visible = rows[start:start + PAGE_SIZE]
 
@@ -127,7 +125,14 @@ def basket_view(user_id, page=0):
         ),
     ])
 
-    # Yeni duymemiz
+    # Yeni ad deyisme duymesi
+    buttons.append([
+        InlineKeyboardButton(
+            "✏️ Adını dəyiş",
+            callback_data="pantry:rename",
+        )
+    ])
+
     buttons.append([
         InlineKeyboardButton(
             "⚡ Tez əlavə et",
@@ -138,7 +143,7 @@ def basket_view(user_id, page=0):
     return text, InlineKeyboardMarkup(buttons)
 
 
-# Erzaq silme secimi
+# Silme secimi ekrani
 def delete_view(user_id, state):
     rows = get_rows(user_id)
 
@@ -213,12 +218,75 @@ def delete_view(user_id, state):
     return text, InlineKeyboardMarkup(buttons)
 
 
+# Adi deyisilecek mehsulu secme ekrani
+def rename_view(user_id, page=0):
+    rows = get_rows(user_id)
+
+    if not rows:
+        return basket_view(user_id)
+
+    page = page_number(page, len(rows))
+    start = page * PAGE_SIZE
+    visible = rows[start:start + PAGE_SIZE]
+
+    total_pages = (
+        len(rows) + PAGE_SIZE - 1
+    ) // PAGE_SIZE
+
+    text = (
+        "✏️ Ərzağın adını dəyiş\n\n"
+        "Adını dəyişmək istədiyin ərzağı seç.\n\n"
+        f"Səhifə: {page + 1}/{total_pages}"
+    )
+
+    buttons = []
+
+    for item_id, name, _ in visible:
+        buttons.append([
+            InlineKeyboardButton(
+                f"✏️ {name}",
+                callback_data=f"pantry:renamepick:{item_id}",
+            )
+        ])
+
+    navigation = []
+
+    if page > 0:
+        navigation.append(
+            InlineKeyboardButton(
+                "⬅️ Əvvəlki",
+                callback_data=f"pantry:renamepage:{page - 1}",
+            )
+        )
+
+    if start + PAGE_SIZE < len(rows):
+        navigation.append(
+            InlineKeyboardButton(
+                "Növbəti ➡️",
+                callback_data=f"pantry:renamepage:{page + 1}",
+            )
+        )
+
+    if navigation:
+        buttons.append(navigation)
+
+    buttons.append([
+        InlineKeyboardButton(
+            "⬅️ Ərzaqlarım",
+            callback_data="pantry:renamecancel",
+        )
+    ])
+
+    return text, InlineKeyboardMarkup(buttons)
+
+
 # Esas menyudan Erzaqlarim acildiqda
 async def show_basket(update, context):
     user_id = update.effective_user.id
 
-    # Evvelki yarimciq secimleri bagla
+    # Yarimciq emeliyyatlari legv et
     context.user_data.pop("delete_state", None)
+    context.user_data.pop("rename_target", None)
     context.user_data.pop("quick_selected", None)
     context.user_data.pop("quick_page", None)
 
@@ -232,7 +300,138 @@ async def show_basket(update, context):
     context.user_data["basket_message_id"] = message.message_id
 
 
-# Sebetdeki duymeleri idare et
+# Ad deyisme ucun yeni metni qebul et
+async def handle_rename_text(update, context):
+    user_id = update.effective_user.id
+
+    state = context.user_data.get("rename_target")
+
+    if state is None:
+        return
+
+    new_name = " ".join(update.message.text.split())
+
+    # Bir mesaja yalniz bir erzaq adi qebul et
+    if (
+        not new_name
+        or len(new_name) > 50
+        or "," in new_name
+        or ";" in new_name
+        or "\n" in update.message.text
+        or re.search(r"\d", new_name)
+        or re.search(
+            r"\b(evdə|evde|var|yoxdur|yoxdu|bitib|qalmayıb)\b",
+            new_name,
+            re.IGNORECASE,
+        )
+        or not re.fullmatch(
+            r"[^\W\d_]+(?:[ -][^\W\d_]+)*",
+            new_name,
+            re.UNICODE,
+        )
+    ):
+        await update.message.reply_text(
+            "❌ Yalnız bir ərzağın adını yaz.\n\n"
+            "Məsələn: Qırmızı soğan\n\n"
+            "Yenidən yaz və ya yuxarıdakı "
+            "«Ləğv et» düyməsinə bas."
+        )
+        return
+
+    new_name = (
+        new_name[0].upper()
+        + new_name[1:].lower()
+    )
+
+    normalized = new_name.casefold()
+
+    # Yalniz bu istifadecinin secdiyi setri deyis
+    with sqlite3.connect(DB_PATH) as db:
+        current = db.execute(
+            """
+            SELECT name, normalized_name
+            FROM ingredients
+            WHERE id = ? AND user_id = ?
+            """,
+            (state["id"], user_id),
+        ).fetchone()
+
+        if (
+            current is None
+            or current[0] != state["name"]
+            or current[1] != state["normalized"]
+        ):
+            context.user_data.pop("rename_target", None)
+
+            await update.message.reply_text(
+                "Siyahı dəyişib. Ad dəyişmə əməliyyatını "
+                "yenidən başlat."
+            )
+
+            await show_basket(update, context)
+            return
+
+        # Eyni adli basqa erzaq varsa, deyisme
+        duplicate = db.execute(
+            """
+            SELECT id
+            FROM ingredients
+            WHERE user_id = ?
+              AND normalized_name = ?
+              AND id != ?
+            """,
+            (user_id, normalized, state["id"]),
+        ).fetchone()
+
+        if duplicate is not None:
+            await update.message.reply_text(
+                f"ℹ️ «{new_name}» artıq siyahındadır.\n\n"
+                "Başqa ad yaz və ya «Ləğv et» düyməsinə bas."
+            )
+            return
+
+        try:
+            db.execute(
+                """
+                UPDATE ingredients
+                SET name = ?, normalized_name = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (
+                    new_name,
+                    normalized,
+                    state["id"],
+                    user_id,
+                ),
+            )
+        except sqlite3.IntegrityError:
+            await update.message.reply_text(
+                "Bu ad artıq siyahındadır. "
+                "Zəhmət olmasa, başqa ad yaz."
+            )
+            return
+
+    old_name = state["name"]
+
+    context.user_data.pop("rename_target", None)
+
+    # Siyahi deyisibse kohne undo ve silme
+    # secimi artiq istifade edilmesin
+    if new_name != old_name:
+        context.user_data.pop("undo", None)
+        context.user_data.pop("delete_state", None)
+
+    await update.message.reply_text(
+        f"✅ Ərzağın adı dəyişdirildi!\n\n"
+        f"Əvvəl: {old_name}\n"
+        f"İndi: {new_name}"
+    )
+
+    # Yeni siyahini goster
+    await show_basket(update, context)
+
+
+# Erzaqlarim duymelerini idare et
 async def basket_click(update, context):
     query = update.callback_query
     user_id = query.from_user.id
@@ -244,7 +443,8 @@ async def basket_click(update, context):
         != context.user_data.get("basket_message_id")
     ):
         await query.answer(
-            "Bu menyu köhnəlib. Ərzaqlarım bölməsini yenidən aç.",
+            "Bu menyu köhnəlib. "
+            "Ərzaqlarım bölməsini yenidən aç.",
             show_alert=True,
         )
         return
@@ -256,7 +456,7 @@ async def basket_click(update, context):
 
     rows = get_rows(user_id)
 
-    # Sehife deyis
+    # Sebetin sehifesini deyis
     if action == "page":
         page = int(parts[2])
         text, keyboard = basket_view(user_id, page)
@@ -282,8 +482,66 @@ async def basket_click(update, context):
             )
         return
 
+    # Ad deyisme secimini ac
+    elif action == "rename":
+        context.user_data.pop("delete_state", None)
+        context.user_data.pop("rename_target", None)
+
+        text, keyboard = rename_view(user_id)
+
+    # Ad deyisme seciminin sehifesini deyis
+    elif action == "renamepage":
+        page = int(parts[2])
+        text, keyboard = rename_view(user_id, page)
+
+    # Adi deyisilecek erzaq secildi
+    elif action == "renamepick":
+        item_id = int(parts[2])
+
+        target = next(
+            (row for row in rows if row[0] == item_id),
+            None,
+        )
+
+        if target is None:
+            await query.message.reply_text(
+                "Bu ərzaq artıq siyahıda yoxdur. "
+                "Ərzaqlarım bölməsini yenidən aç."
+            )
+
+            text, keyboard = basket_view(user_id)
+        else:
+            context.user_data["rename_target"] = {
+                "id": target[0],
+                "name": target[1],
+                "normalized": target[2],
+            }
+
+            text = (
+                "✏️ Ərzağın adını dəyiş\n\n"
+                f"Seçilən ərzaq: {target[1]}\n\n"
+                "İndi yeni adını adi mesaj kimi yaz.\n\n"
+                "Məsələn: Qırmızı soğan"
+            )
+
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(
+                        "❌ Ləğv et",
+                        callback_data="pantry:renamecancel",
+                    )
+                ]
+            ])
+
+    # Ad deyismeni legv et
+    elif action == "renamecancel":
+        context.user_data.pop("rename_target", None)
+        text, keyboard = basket_view(user_id)
+
     # Silme ekranini ac
     elif action == "delete":
+        context.user_data.pop("rename_target", None)
+
         if not rows:
             text, keyboard = basket_view(user_id)
         else:
@@ -295,11 +553,7 @@ async def basket_click(update, context):
             }
 
             context.user_data["delete_state"] = state
-
-            text, keyboard = delete_view(
-                user_id,
-                state,
-            )
+            text, keyboard = delete_view(user_id, state)
 
     # Son silinmeni geri qaytar
     elif action == "undo":
@@ -337,11 +591,10 @@ async def basket_click(update, context):
 
         text, keyboard = basket_view(user_id)
 
-    # Silme funksiyasinin diger emeliyyatlari
+    # Silme emeliyyatlari
     else:
         state = context.user_data.get("delete_state")
 
-        # Siyahi basqa yerde deyisibse secimi sifirla
         if (
             not state
             or snapshot(rows) != state["snapshot"]
@@ -355,16 +608,12 @@ async def basket_click(update, context):
 
             text, keyboard = basket_view(user_id)
 
-        # Silme ekraninin sehifesi
+        # Silme sehifesini deyis
         elif action == "deletepage":
             state["page"] = int(parts[2])
+            text, keyboard = delete_view(user_id, state)
 
-            text, keyboard = delete_view(
-                user_id,
-                state,
-            )
-
-        # Erzaq secimini deyis
+        # Erzaq sec ve ya secimden cixar
         elif action == "toggle":
             item_id = int(parts[2])
 
@@ -379,21 +628,14 @@ async def basket_click(update, context):
                     state["selected"].add(item_id)
 
             state["confirm"] = False
+            text, keyboard = delete_view(user_id, state)
 
-            text, keyboard = delete_view(
-                user_id,
-                state,
-            )
-
-        # Silinmeden evvel tesdiq
+        # Silinmeden evvel tesdiq ekrani
         elif action == "confirm":
             selected = state["selected"]
 
             if not selected:
-                text, keyboard = delete_view(
-                    user_id,
-                    state,
-                )
+                text, keyboard = delete_view(user_id, state)
             else:
                 names = [
                     row[1] for row in rows
@@ -429,31 +671,23 @@ async def basket_click(update, context):
                     ],
                 ])
 
-        # Tesdiq ekranindan geri
+        # Tesdiq ekranindan geri don
         elif action == "back":
             state["confirm"] = False
-
-            text, keyboard = delete_view(
-                user_id,
-                state,
-            )
+            text, keyboard = delete_view(user_id, state)
 
         # Silmeni legv et
         elif action == "cancel":
             context.user_data.pop("delete_state", None)
-
             text, keyboard = basket_view(user_id)
 
-        # Tesdiqlenmis silme
+        # Secilmis erzaqlari sil
         elif action == "apply":
             if (
                 not state["confirm"]
                 or not state["selected"]
             ):
-                text, keyboard = delete_view(
-                    user_id,
-                    state,
-                )
+                text, keyboard = delete_view(user_id, state)
             else:
                 removed = [
                     row for row in rows
@@ -477,10 +711,7 @@ async def basket_click(update, context):
                     "after": after,
                 }
 
-                context.user_data.pop(
-                    "delete_state",
-                    None,
-                )
+                context.user_data.pop("delete_state", None)
 
                 text = (
                     f"✅ {len(removed)} ərzaq silindi.\n\n"

@@ -14,7 +14,11 @@ from telegram.ext import (
     filters,
 )
 
-from basket_ui import show_basket, basket_click
+from basket_ui import (
+    basket_click,
+    handle_rename_text,
+    show_basket,
+)
 from quick_add import quick_add_click
 
 
@@ -115,6 +119,10 @@ async def start(
     context: ContextTypes.DEFAULT_TYPE,
 ):
     user_id = update.effective_user.id
+
+    # Yarimciq ad deyisme emeliyyatini bagla
+    context.user_data.pop("rename_target", None)
+
     first_visit = register_user(user_id)
 
     if first_visit:
@@ -159,6 +167,21 @@ async def handle_text(
 
     register_user(user_id)
 
+    # Ad deyisme rejimindeyikse yeni adi qebul et.
+    # Esas menyu duymeleri bu rejimden cixmaga imkan verir.
+    menu_buttons = {
+        "🧺 Ərzaqlarım",
+        "🍽️ Nə bişirim?",
+        "ℹ️ Kömək",
+    }
+
+    if text in menu_buttons:
+        context.user_data.pop("rename_target", None)
+
+    elif context.user_data.get("rename_target") is not None:
+        await handle_rename_text(update, context)
+        return
+
     # Resept duymesi
     if text == "🍽️ Nə bişirim?":
         items = get_ingredients(user_id)
@@ -180,9 +203,9 @@ async def handle_text(
             "ℹ️ Kömək\n\n"
             "Ərzaqları mətnlə əlavə edə bilərsən.\n\n"
             "Məsələn: Kartof, yumurta, soğan\n\n"
-            "«Ərzaqlarım» bölməsində məhsulları silə "
-            "və «⚡ Tez əlavə et» ilə hazır siyahıdan "
-            "seçə bilərsən.\n\n"
+            "«Ərzaqlarım» bölməsində məhsulları silə, "
+            "adlarını dəyişə və «⚡ Tez əlavə et» ilə "
+            "hazır siyahıdan seçə bilərsən.\n\n"
             "Şəkil tanıma və resept funksiyaları "
             "növbəti mərhələlərdə aktivləşdiriləcək."
         )
@@ -248,8 +271,8 @@ async def handle_text(
                 names,
             )
 
-            # Siyahi deyisibse kohne silmeni
-            # geri qaytarma imkani legv olunur
+            # Siyahi deyisibse kohne geri qaytarma
+            # ve silme secimlerini legv et
             if added:
                 context.user_data.pop("undo", None)
                 context.user_data.pop("delete_state", None)
@@ -313,7 +336,7 @@ def main():
         CommandHandler("start", start)
     )
 
-    # Erzaqlarim duymeleri
+    # Erzaqlarim inline duymeleri
     app.add_handler(
         CallbackQueryHandler(
             basket_click,
@@ -321,7 +344,7 @@ def main():
         )
     )
 
-    # Tez elave et duymeleri
+    # Tez elave et inline duymeleri
     app.add_handler(
         CallbackQueryHandler(
             quick_add_click,
@@ -345,7 +368,7 @@ def main():
         )
     )
 
-    # Sekiller
+    # Sekil mesajlari
     app.add_handler(
         MessageHandler(
             filters.PHOTO,
