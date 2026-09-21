@@ -7,22 +7,21 @@ from dotenv import load_dotenv
 from telegram import ReplyKeyboardMarkup, Update
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
-    CallbackQueryHandler,
     filters,
 )
 
-# Yeni erzaq idareetme modulu
 from basket_ui import show_basket, basket_click
+from quick_add import quick_add_click
 
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "ingredients.db"
 
 
-# Esas menyu
 MENU = ReplyKeyboardMarkup(
     [
         ["🧺 Ərzaqlarım", "🍽️ Nə bişirim?"],
@@ -68,7 +67,8 @@ def get_ingredients(user_id):
     with sqlite3.connect(DB_PATH) as db:
         rows = db.execute(
             """
-            SELECT name FROM ingredients
+            SELECT name
+            FROM ingredients
             WHERE user_id = ?
             ORDER BY id ASC
             """,
@@ -109,13 +109,12 @@ def add_ingredients(user_id, names):
     return added, existing
 
 
-# START KOMANDASI
+# /start komandasi
 async def start(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
     user_id = update.effective_user.id
-
     first_visit = register_user(user_id)
 
     if first_visit:
@@ -128,7 +127,6 @@ async def start(
             "Ərzaqları əlavə etdikdən sonra "
             "«🍽️ Nə bişirim?» düyməsinə bas."
         )
-
     else:
         count = len(get_ingredients(user_id))
 
@@ -138,7 +136,6 @@ async def start(
                 f"Siyahında {count} ərzaq var.\n"
                 "Ərzaqlarını yeniləyə və ya yemək tapa bilərsən."
             )
-
         else:
             message = (
                 "Yenidən xoş gəldin! 👋\n\n"
@@ -152,7 +149,7 @@ async def start(
     )
 
 
-# METN MESAJLARI
+# Metn mesajlari
 async def handle_text(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -162,9 +159,8 @@ async def handle_text(
 
     register_user(user_id)
 
-    # RESEPT DUYMESI
+    # Resept duymesi
     if text == "🍽️ Nə bişirim?":
-
         items = get_ingredients(user_id)
 
         if not items:
@@ -172,34 +168,33 @@ async def handle_text(
                 "🧺 Siyahın boşdur.\n\n"
                 "Əvvəlcə evində olan ərzaqları əlavə et."
             )
-
         else:
             response = (
                 "🍽️ Resept sistemi hələ hazırlanır.\n\n"
                 f"Siyahındakı {len(items)} ərzaq yadda saxlanılıb."
             )
 
-    # KOMEK
+    # Komek
     elif text == "ℹ️ Kömək":
-
         response = (
             "ℹ️ Kömək\n\n"
-            "Hazırda ərzaqları mətnlə əlavə edə bilərsən.\n\n"
+            "Ərzaqları mətnlə əlavə edə bilərsən.\n\n"
             "Məsələn: Kartof, yumurta, soğan\n\n"
-            "Şəkil və resept funksiyaları "
+            "«Ərzaqlarım» bölməsində məhsulları silə "
+            "və «⚡ Tez əlavə et» ilə hazır siyahıdan "
+            "seçə bilərsən.\n\n"
+            "Şəkil tanıma və resept funksiyaları "
             "növbəti mərhələlərdə aktivləşdiriləcək."
         )
 
-    # ERZAQ ELAVE EDILMESI
+    # Erzaq elave edilmesi
     else:
-
         # Serbest cumleleri helelik sehv yadda saxlamayaq
         if re.search(
             r"\b(evdə|evde|var|yoxdur|yoxdu|bitib|qalmayıb)\b",
             text,
             re.IGNORECASE,
         ):
-
             await update.message.reply_text(
                 "Hələlik ərzaq adlarını sadə siyahı kimi yaz.\n\n"
                 "Məsələn: Kartof, yumurta, soğan",
@@ -215,9 +210,9 @@ async def handle_text(
         )
 
         names = []
+        seen = set()
 
         for part in parts:
-
             name = part.strip(" \t\r\n.!?،؛")
 
             # Meselen: 3 kartof -> kartof
@@ -229,7 +224,6 @@ async def handle_text(
                 flags=re.IGNORECASE,
             ).strip()
 
-            # Bos ve ya yanlis melumatlari kec
             if not name or len(name) > 50:
                 continue
 
@@ -237,25 +231,28 @@ async def handle_text(
                 continue
 
             name = name[0].upper() + name[1:].lower()
+            normalized = name.casefold()
 
-            if name.casefold() not in [
-                item.casefold() for item in names
-            ]:
+            if normalized not in seen:
                 names.append(name)
+                seen.add(normalized)
 
         if not names:
-
             response = (
                 "Ərzaq adı müəyyən edə bilmədim.\n\n"
                 "Məsələn: Kartof, yumurta, soğan"
             )
-
         else:
-
             added, existing = add_ingredients(
                 user_id,
                 names,
             )
+
+            # Siyahi deyisibse kohne silmeni
+            # geri qaytarma imkani legv olunur
+            if added:
+                context.user_data.pop("undo", None)
+                context.user_data.pop("delete_state", None)
 
             lines = []
 
@@ -285,12 +282,11 @@ async def handle_text(
     )
 
 
-# SEKIL FUNKSIYASI
+# Sekil funksiyasi helelik hazir deyil
 async def handle_photo(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-
     await update.message.reply_text(
         "📸 Şəkil tanıma funksiyasını "
         "növbəti mərhələlərdə aktivləşdirəcəyik.\n\n"
@@ -299,28 +295,25 @@ async def handle_photo(
     )
 
 
-# BOTUN ISHE SALINMASI
+# Botu ise sal
 def main():
-
     load_dotenv(BASE_DIR / ".env")
 
     token = os.getenv("TELEGRAM_BOT_TOKEN")
 
     if not token:
-        raise RuntimeError(
-            "Telegram tokeni tapılmadı!"
-        )
+        raise RuntimeError("Telegram tokeni tapılmadı!")
 
     init_db()
 
     app = Application.builder().token(token).build()
 
-    # 1. START
+    # Start komandasi
     app.add_handler(
         CommandHandler("start", start)
     )
 
-    # 2. ERZAQLARIM INLINE DUYMELERI
+    # Erzaqlarim duymeleri
     app.add_handler(
         CallbackQueryHandler(
             basket_click,
@@ -328,8 +321,15 @@ def main():
         )
     )
 
-    # 3. ERZAQLARIM ESAS MENYU DUYMESI
-    # Bu handler umumi metn handlerinden evvel olmalidir
+    # Tez elave et duymeleri
+    app.add_handler(
+        CallbackQueryHandler(
+            quick_add_click,
+            pattern=r"^quick:",
+        )
+    )
+
+    # Esas menyudaki Erzaqlarim duymesi
     app.add_handler(
         MessageHandler(
             filters.Regex(r"^🧺 Ərzaqlarım$"),
@@ -337,7 +337,7 @@ def main():
         )
     )
 
-    # 4. DIGER METN MESAJLARI
+    # Diger metn mesajlari
     app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
@@ -345,7 +345,7 @@ def main():
         )
     )
 
-    # 5. SEKIL MESAJLARI
+    # Sekiller
     app.add_handler(
         MessageHandler(
             filters.PHOTO,
@@ -353,9 +353,7 @@ def main():
         )
     )
 
-    print(
-        "Bot işləyir! Dayandırmaq üçün Ctrl+C bas."
-    )
+    print("Bot işləyir! Dayandırmaq üçün Ctrl+C bas.")
 
     app.run_polling()
 

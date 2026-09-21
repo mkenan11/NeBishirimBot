@@ -3,10 +3,12 @@ from pathlib import Path
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+
 DB_PATH = Path(__file__).resolve().parent / "ingredients.db"
 PAGE_SIZE = 10
 
 
+# Istifadecinin erzaqlarini getir
 def get_rows(user_id):
     with sqlite3.connect(DB_PATH) as db:
         return db.execute(
@@ -20,33 +22,53 @@ def get_rows(user_id):
         ).fetchall()
 
 
+# Siyahinin deyisib-deyismediyini yoxlamaq ucun
 def snapshot(rows):
-    return tuple((row[0], row[1]) for row in rows)
+    return tuple(
+        (row[0], row[1], row[2])
+        for row in rows
+    )
 
 
+# Sehife nomresini duzgun araliqda saxla
 def page_number(page, total):
     maximum = max(0, (total - 1) // PAGE_SIZE)
     return max(0, min(page, maximum))
 
 
+# Erzaqlarim ekrani
 def basket_view(user_id, page=0):
     rows = get_rows(user_id)
 
+    # Bos siyahi
     if not rows:
         text = (
             "🧺 Ərzaqlarım\n\n"
             "Siyahın hələ boşdur.\n\n"
-            "Ərzaqları yaz və ya şəkil göndər."
+            "Ərzaqları yaz və ya ⚡ Tez əlavə et "
+            "bölməsindən seç."
         )
+
         buttons = [
-            [InlineKeyboardButton(
-                "➕ Ərzaq əlavə et",
-                callback_data="pantry:add"
-            )]
+            [
+                InlineKeyboardButton(
+                    "➕ Ərzaq əlavə et",
+                    callback_data="pantry:add",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "⚡ Tez əlavə et",
+                    callback_data="quick:open",
+                )
+            ],
         ]
+
         return text, InlineKeyboardMarkup(buttons)
 
+    # Dolu siyahi
     page = page_number(page, len(rows))
+
     start = page * PAGE_SIZE
     visible = rows[start:start + PAGE_SIZE]
 
@@ -55,20 +77,24 @@ def basket_view(user_id, page=0):
         for i, row in enumerate(visible)
     ]
 
+    total_pages = (
+        len(rows) + PAGE_SIZE - 1
+    ) // PAGE_SIZE
+
     text = (
         f"🧺 Ərzaqlarım ({len(rows)})\n\n"
         + "\n".join(lines)
+        + f"\n\nSəhifə: {page + 1}/{total_pages}"
     )
 
     buttons = []
-
     navigation = []
 
     if page > 0:
         navigation.append(
             InlineKeyboardButton(
                 "⬅️ Əvvəlki",
-                callback_data=f"pantry:page:{page - 1}"
+                callback_data=f"pantry:page:{page - 1}",
             )
         )
 
@@ -76,7 +102,7 @@ def basket_view(user_id, page=0):
         navigation.append(
             InlineKeyboardButton(
                 "Növbəti ➡️",
-                callback_data=f"pantry:page:{page + 1}"
+                callback_data=f"pantry:page:{page + 1}",
             )
         )
 
@@ -86,27 +112,40 @@ def basket_view(user_id, page=0):
     buttons.append([
         InlineKeyboardButton(
             "🍽️ Nə bişirim?",
-            callback_data="pantry:recipe"
+            callback_data="pantry:recipe",
         )
     ])
 
     buttons.append([
         InlineKeyboardButton(
             "➕ Əlavə et",
-            callback_data="pantry:add"
+            callback_data="pantry:add",
         ),
         InlineKeyboardButton(
             "➖ Ərzaq sil",
-            callback_data="pantry:delete"
+            callback_data="pantry:delete",
         ),
+    ])
+
+    # Yeni duymemiz
+    buttons.append([
+        InlineKeyboardButton(
+            "⚡ Tez əlavə et",
+            callback_data="quick:open",
+        )
     ])
 
     return text, InlineKeyboardMarkup(buttons)
 
 
+# Erzaq silme secimi
 def delete_view(user_id, state):
     rows = get_rows(user_id)
-    page = page_number(state["page"], len(rows))
+
+    page = page_number(
+        state["page"],
+        len(rows),
+    )
     state["page"] = page
 
     start = page * PAGE_SIZE
@@ -131,7 +170,7 @@ def delete_view(user_id, state):
         buttons.append([
             InlineKeyboardButton(
                 f"{mark} {name}",
-                callback_data=f"pantry:toggle:{item_id}"
+                callback_data=f"pantry:toggle:{item_id}",
             )
         ])
 
@@ -141,7 +180,7 @@ def delete_view(user_id, state):
         navigation.append(
             InlineKeyboardButton(
                 "⬅️",
-                callback_data=f"pantry:deletepage:{page - 1}"
+                callback_data=f"pantry:deletepage:{page - 1}",
             )
         )
 
@@ -149,7 +188,7 @@ def delete_view(user_id, state):
         navigation.append(
             InlineKeyboardButton(
                 "➡️",
-                callback_data=f"pantry:deletepage:{page + 1}"
+                callback_data=f"pantry:deletepage:{page + 1}",
             )
         )
 
@@ -160,25 +199,28 @@ def delete_view(user_id, state):
         buttons.append([
             InlineKeyboardButton(
                 f"🗑️ Seçilənləri sil ({len(state['selected'])})",
-                callback_data="pantry:confirm"
+                callback_data="pantry:confirm",
             )
         ])
 
     buttons.append([
         InlineKeyboardButton(
             "❌ Ləğv et",
-            callback_data="pantry:cancel"
+            callback_data="pantry:cancel",
         )
     ])
 
     return text, InlineKeyboardMarkup(buttons)
 
 
+# Esas menyudan Erzaqlarim acildiqda
 async def show_basket(update, context):
     user_id = update.effective_user.id
 
-    # Evvelki yarimciq silme secimini legv et
+    # Evvelki yarimciq secimleri bagla
     context.user_data.pop("delete_state", None)
+    context.user_data.pop("quick_selected", None)
+    context.user_data.pop("quick_page", None)
 
     text, keyboard = basket_view(user_id)
 
@@ -190,11 +232,12 @@ async def show_basket(update, context):
     context.user_data["basket_message_id"] = message.message_id
 
 
+# Sebetdeki duymeleri idare et
 async def basket_click(update, context):
     query = update.callback_query
     user_id = query.from_user.id
 
-    # Kohne mesajlardaki duymeler aktiv qalmasin
+    # Kohne menyulari blokla
     if (
         query.message is None
         or query.message.message_id
@@ -213,10 +256,12 @@ async def basket_click(update, context):
 
     rows = get_rows(user_id)
 
+    # Sehife deyis
     if action == "page":
         page = int(parts[2])
         text, keyboard = basket_view(user_id, page)
 
+    # Erzaq elave et
     elif action == "add":
         await query.message.reply_text(
             "➕ Ərzaqları yaz və ya şəkil göndər.\n\n"
@@ -224,6 +269,7 @@ async def basket_click(update, context):
         )
         return
 
+    # Resept helelik hazir deyil
     elif action == "recipe":
         if rows:
             await query.message.reply_text(
@@ -236,6 +282,7 @@ async def basket_click(update, context):
             )
         return
 
+    # Silme ekranini ac
     elif action == "delete":
         if not rows:
             text, keyboard = basket_view(user_id)
@@ -246,15 +293,27 @@ async def basket_click(update, context):
                 "snapshot": snapshot(rows),
                 "confirm": False,
             }
-            context.user_data["delete_state"] = state
-            text, keyboard = delete_view(user_id, state)
 
+            context.user_data["delete_state"] = state
+
+            text, keyboard = delete_view(
+                user_id,
+                state,
+            )
+
+    # Son silinmeni geri qaytar
     elif action == "undo":
         undo = context.user_data.get("undo")
 
-        if not undo or snapshot(rows) != undo["after"]:
+        if (
+            not undo
+            or snapshot(rows) != undo["after"]
+        ):
+            context.user_data.pop("undo", None)
+
             await query.message.reply_text(
-                "Bu silmə əməliyyatını artıq geri qaytarmaq olmur."
+                "Bu silmə əməliyyatını artıq "
+                "geri qaytarmaq olmur."
             )
             return
 
@@ -266,30 +325,52 @@ async def basket_click(update, context):
                     (id, user_id, name, normalized_name)
                     VALUES (?, ?, ?, ?)
                     """,
-                    (item_id, user_id, name, normalized),
+                    (
+                        item_id,
+                        user_id,
+                        name,
+                        normalized,
+                    ),
                 )
 
         context.user_data.pop("undo", None)
+
         text, keyboard = basket_view(user_id)
 
+    # Silme funksiyasinin diger emeliyyatlari
     else:
         state = context.user_data.get("delete_state")
 
-        if not state or snapshot(rows) != state["snapshot"]:
+        # Siyahi basqa yerde deyisibse secimi sifirla
+        if (
+            not state
+            or snapshot(rows) != state["snapshot"]
+        ):
             context.user_data.pop("delete_state", None)
+
             await query.message.reply_text(
                 "Siyahı dəyişib. Zəhmət olmasa, "
                 "silmə əməliyyatına yenidən başla."
             )
+
             text, keyboard = basket_view(user_id)
 
+        # Silme ekraninin sehifesi
         elif action == "deletepage":
             state["page"] = int(parts[2])
-            text, keyboard = delete_view(user_id, state)
 
+            text, keyboard = delete_view(
+                user_id,
+                state,
+            )
+
+        # Erzaq secimini deyis
         elif action == "toggle":
             item_id = int(parts[2])
-            valid_ids = {row[0] for row in rows}
+
+            valid_ids = {
+                row[0] for row in rows
+            }
 
             if item_id in valid_ids:
                 if item_id in state["selected"]:
@@ -298,13 +379,21 @@ async def basket_click(update, context):
                     state["selected"].add(item_id)
 
             state["confirm"] = False
-            text, keyboard = delete_view(user_id, state)
 
+            text, keyboard = delete_view(
+                user_id,
+                state,
+            )
+
+        # Silinmeden evvel tesdiq
         elif action == "confirm":
             selected = state["selected"]
 
             if not selected:
-                text, keyboard = delete_view(user_id, state)
+                text, keyboard = delete_view(
+                    user_id,
+                    state,
+                )
             else:
                 names = [
                     row[1] for row in rows
@@ -314,7 +403,9 @@ async def basket_click(update, context):
                 preview = "\n".join(names[:15])
 
                 if len(names) > 15:
-                    preview += f"\n... və daha {len(names) - 15} ərzaq"
+                    preview += (
+                        f"\n... və daha {len(names) - 15} ərzaq"
+                    )
 
                 text = (
                     f"🗑️ {len(names)} ərzaq silinsin?\n\n"
@@ -324,27 +415,45 @@ async def basket_click(update, context):
                 state["confirm"] = True
 
                 keyboard = InlineKeyboardMarkup([
-                    [InlineKeyboardButton(
-                        "✅ Bəli, sil",
-                        callback_data="pantry:apply"
-                    )],
-                    [InlineKeyboardButton(
-                        "⬅️ Geri",
-                        callback_data="pantry:back"
-                    )],
+                    [
+                        InlineKeyboardButton(
+                            "✅ Bəli, sil",
+                            callback_data="pantry:apply",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            "⬅️ Geri",
+                            callback_data="pantry:back",
+                        )
+                    ],
                 ])
 
+        # Tesdiq ekranindan geri
         elif action == "back":
             state["confirm"] = False
-            text, keyboard = delete_view(user_id, state)
 
+            text, keyboard = delete_view(
+                user_id,
+                state,
+            )
+
+        # Silmeni legv et
         elif action == "cancel":
             context.user_data.pop("delete_state", None)
+
             text, keyboard = basket_view(user_id)
 
+        # Tesdiqlenmis silme
         elif action == "apply":
-            if not state["confirm"] or not state["selected"]:
-                text, keyboard = delete_view(user_id, state)
+            if (
+                not state["confirm"]
+                or not state["selected"]
+            ):
+                text, keyboard = delete_view(
+                    user_id,
+                    state,
+                )
             else:
                 removed = [
                     row for row in rows
@@ -368,7 +477,10 @@ async def basket_click(update, context):
                     "after": after,
                 }
 
-                context.user_data.pop("delete_state", None)
+                context.user_data.pop(
+                    "delete_state",
+                    None,
+                )
 
                 text = (
                     f"✅ {len(removed)} ərzaq silindi.\n\n"
@@ -376,14 +488,18 @@ async def basket_click(update, context):
                 )
 
                 keyboard = InlineKeyboardMarkup([
-                    [InlineKeyboardButton(
-                        "↩️ Geri qaytar",
-                        callback_data="pantry:undo"
-                    )],
-                    [InlineKeyboardButton(
-                        "🧺 Siyahımı göstər",
-                        callback_data="pantry:page:0"
-                    )],
+                    [
+                        InlineKeyboardButton(
+                            "↩️ Geri qaytar",
+                            callback_data="pantry:undo",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            "🧺 Siyahımı göstər",
+                            callback_data="pantry:page:0",
+                        )
+                    ],
                 ])
 
         else:
