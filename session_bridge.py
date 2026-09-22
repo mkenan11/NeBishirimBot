@@ -1,4 +1,4 @@
-"""Telegram istifadəçi sessiyalarını Neon ilə əlaqələndirir."""
+"""Telegram sessiyalarını Neon ilə əlaqələndirir."""
 
 import asyncio
 import logging
@@ -27,10 +27,9 @@ async def load_state(update, context):
         )
 
     except Exception:
-        LOG.exception(
-            "Sessiya oxunmadi: %s",
-            user.id,
-        )
+        LOG.exception("Sessiya oxunmadı.")
+
+        context.application.bot_data["_session_failed"] = True
 
         if update.callback_query:
             await update.callback_query.answer(
@@ -65,10 +64,9 @@ async def save_state(update, context):
         )
 
     except Exception:
-        LOG.exception(
-            "Sessiya saxlanmadi: %s",
-            user.id,
-        )
+        LOG.exception("Sessiya saxlanmadı.")
+
+        context.application.bot_data["_session_failed"] = True
 
         if update.effective_message:
             await update.effective_message.reply_text(
@@ -78,7 +76,7 @@ async def save_state(update, context):
 
 
 def install_session_handlers(application):
-    """Sessiya -> mövcud bot əməliyyatı -> yadda saxla."""
+    """Sessiyanı oxu, əməliyyatı icra et, sonra saxla."""
 
     application.add_handler(
         TypeHandler(Update, load_state),
