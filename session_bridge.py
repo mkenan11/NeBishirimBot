@@ -7,6 +7,7 @@ from telegram import Update
 from telegram.ext import ApplicationHandlerStop, TypeHandler
 
 from session_store import load_session, save_session
+from command_controls import install_command_controls
 
 
 LOG = logging.getLogger(__name__)
@@ -76,13 +77,18 @@ async def save_state(update, context):
 
 
 def install_session_handlers(application):
-    """Sessiyanı oxu, əməliyyatı icra et, sonra saxla."""
+    """Sessiyanı oxu, komandaları icra et, sonra saxla."""
 
+    # İlk olaraq Neon-dan vəziyyəti oxuyuruq.
     application.add_handler(
         TypeHandler(Update, load_state),
-        group=-1,
+        group=-2,
     )
 
+    # Fasilə yoxlaması və komandalar.
+    install_command_controls(application)
+
+    # Əməliyyatdan sonra Neon-a yazırıq.
     application.add_handler(
         TypeHandler(Update, save_state),
         group=1,

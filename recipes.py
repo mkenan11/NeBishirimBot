@@ -112,7 +112,7 @@ def btn(text, callback):
 
 def video_url(name):
     # Konkret yoxlanmış video deyil, YouTube axtarışıdır.
-    search = name + " resepti hazırlanması Azərbaycan dilində"
+    search = name + " resepti hazırlanması "
 
     return (
         "https://www.youtube.com/results?search_query="
