@@ -1,0 +1,16 @@
+.env
+.env.*
+.venv/
+__pycache__/
+
+*.db
+*.db.*
+*.bak
+*.backup.py
+*.before_*.py
+
+migrate_neon.py
+gemini_compare.py
+gemini_test.py
+gemini_full_recipe_test.py
+nvidia_recipe_test.py

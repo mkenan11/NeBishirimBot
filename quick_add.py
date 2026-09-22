@@ -1,4 +1,4 @@
-import sqlite3
+import database as sqlite3
 from pathlib import Path
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup

@@ -1,6 +1,6 @@
 import os
 import re
-import sqlite3
+import database as sqlite3
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -27,6 +27,7 @@ from ai_features import (
     handle_photo,
 )
 from recipes import recipe_start, recipe_click
+from session_bridge import install_session_handlers
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "ingredients.db"
@@ -662,7 +663,7 @@ async def help_click(update, context):
     )
 
 
-def main():
+def create_application():
     load_dotenv(BASE_DIR / ".env")
 
     token = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -678,9 +679,15 @@ def main():
             "GEMINI_API_KEY .env faylında tapılmadı!"
         )
 
-    init_db()
 
-    app = Application.builder().token(token).build()
+    app = (
+        Application.builder()
+        .token(token)
+        .concurrent_updates(False)
+        .build()
+    )
+
+    install_session_handlers(app)
 
     app.add_handler(
         CommandHandler("start", start)
@@ -764,10 +771,17 @@ def main():
         )
     )
 
-    print(
-        "Bot işləyir! Dayandırmaq üçün Ctrl+C bas."
-    )
 
+    return app
+
+
+
+def main():
+    # Evvel .env yuklenir, sonra baza hazirlanir.
+    app = create_application()
+    init_db()
+
+    print("Bot isleyir! Dayandirmaq ucun Ctrl+C bas.")
     app.run_polling()
 
 
