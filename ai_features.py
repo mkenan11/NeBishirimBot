@@ -253,9 +253,9 @@ def photo_view(state):
     lines = [
         "📸 Şəkildən tanınan ərzaqlar",
         "",
-        "Siyahını yoxla. Səhv tanınanı düzəlt,",
-        "artıq olanı seçimdən çıxar,",
-        "çatışmayan ərzağı əlavə et.",
+        "Siyahını yoxla: ✅/☐ seçim,",
+        "✏️ ad düzəlişi, 🗑️ nəticədən silmə.",
+        "Çatışmayan ərzağı əlavə edə bilərsən.",
         "",
     ]
 
@@ -289,6 +289,10 @@ def photo_view(state):
             button(
                 "✏️",
                 f"photo:rename:{index}",
+            ),
+            button(
+                "🗑️",
+                f"photo:delete:{index}",
             ),
         ])
 
@@ -647,7 +651,7 @@ async def photo_click(update, context):
         )
         return
 
-    if action in ("toggle", "rename"):
+    if action in ("toggle", "rename", "delete"):
         if (
             len(parts) != 3
             or not parts[2].isdigit()
@@ -657,6 +661,29 @@ async def photo_click(update, context):
         index = int(parts[2])
 
         if not 0 <= index < len(state["names"]):
+            return
+
+        if action == "delete":
+            # Yalniz sekilden taninmis muveqqeti siyahini deyisir.
+            # Sebet bazasina hec bir sorgu gonderilmir.
+            state["names"].pop(index)
+            state["selected"] = {
+                item - 1 if item > index else item
+                for item in state["selected"]
+                if item != index
+            }
+
+            # Gozleyen rename hədəfi indeks deyişməsinə görə
+            # yanlış ərzağı dəyişməsin.
+            if state["mode"] == "rename":
+                state["mode"] = None
+                state["target"] = None
+
+            text, keyboard = photo_view(state)
+            await query.edit_message_text(
+                text,
+                reply_markup=keyboard,
+            )
             return
 
         if action == "toggle":
