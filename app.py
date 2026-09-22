@@ -1,4 +1,4 @@
-"""NeBishirim — Telegram webhook və QStash worker."""
+"""NeBishirim — Telegram webhook ve QStash worker."""
 
 import asyncio
 import hmac
@@ -26,9 +26,7 @@ app = FastAPI(
 )
 
 QSTASH_API = "https://qstash-eu-central-1.upstash.io"
-
 QUEUE_NAME = "ne-bishirim"
-
 MAX_UPDATE_BYTES = 1024 * 1024
 
 
@@ -47,7 +45,7 @@ def required_env(name):
     return value
 
 
-def worker_url():
+def public_url():
     base_url = required_env(
         "PUBLIC_BASE_URL"
     ).rstrip("/")
@@ -57,7 +55,15 @@ def worker_url():
             "PUBLIC_BASE_URL must use HTTPS"
         )
 
-    return base_url + "/internal/qstash"
+    return base_url
+
+
+def worker_url():
+    return public_url() + "/internal/qstash"
+
+
+def test_url():
+    return public_url() + "/internal/qstash-test"
 
 
 # ============================================================
@@ -133,9 +139,7 @@ async def telegram_webhook(request: Request):
             detail="Invalid update",
         )
 
-    update_id = payload.get(
-        "update_id"
-    )
+    update_id = payload.get("update_id")
 
     if type(update_id) is not int:
         raise HTTPException(
@@ -190,7 +194,7 @@ async def telegram_webhook(request: Request):
 
 
 # ============================================================
-# TEKRAR MESAJLARIN YOXLAMASI
+# TEKRAR MESAJLARIN YOXLANMASI
 # ============================================================
 
 def already_processed(update_id):
@@ -250,10 +254,10 @@ async def capture_bot_error(update, context):
 
 
 # ============================================================
-# QSTASH IMZASININ YOXLAMASI
+# QSTASH IMZASININ YOXLANMASI
 # ============================================================
 
-def verify_qstash(body, signature):
+def verify_qstash(body, signature, destination_url):
 
     receiver = Receiver(
         current_signing_key=required_env(
@@ -267,12 +271,100 @@ def verify_qstash(body, signature):
     receiver.verify(
         body=body,
         signature=signature,
-        url=worker_url(),
+        url=destination_url,
     )
 
 
 # ============================================================
-# QSTASH WORKER
+# QSTASH TEST ENDPOINT
+# ============================================================
+
+@app.post("/internal/qstash-test")
+async def qstash_test(request: Request):
+
+    signature = request.headers.get(
+        "Upstash-Signature",
+        "",
+    )
+
+    if not signature:
+        raise HTTPException(
+            status_code=403,
+            detail="Missing signature",
+        )
+
+    body_bytes = await request.body()
+
+    if (
+        not body_bytes
+        or len(body_bytes) > MAX_UPDATE_BYTES
+    ):
+        raise HTTPException(
+            status_code=413,
+            detail="Invalid request size",
+        )
+
+    try:
+        body = body_bytes.decode("utf-8")
+
+    except UnicodeDecodeError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid encoding",
+        )
+
+    try:
+        destination = test_url()
+
+        verify_qstash(
+            body,
+            signature,
+            destination,
+        )
+
+    except RuntimeError:
+        LOG.exception(
+            "QStash test configuration incomplete"
+        )
+
+        raise HTTPException(
+            status_code=503,
+            detail="Server configuration incomplete",
+        )
+
+    except Exception:
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid QStash signature",
+        )
+
+    try:
+        payload = json.loads(body)
+
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid JSON",
+        )
+
+    if (
+        not isinstance(payload, dict)
+        or payload.get("test") != "qstash_connection"
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid test payload",
+        )
+
+    # Telegram botu ve Neon burada isledilmir.
+    return {
+        "ok": True,
+        "signature_valid": True,
+    }
+
+
+# ============================================================
+# REAL QSTASH WORKER
 # ============================================================
 
 @app.post("/internal/qstash")
@@ -309,11 +401,11 @@ async def qstash_worker(request: Request):
             detail="Invalid encoding",
         )
 
-    # Ilk once QStash imzasini yoxla.
     try:
         verify_qstash(
             body,
             signature,
+            worker_url(),
         )
 
     except RuntimeError:
@@ -347,9 +439,7 @@ async def qstash_worker(request: Request):
             detail="Invalid update",
         )
 
-    update_id = payload.get(
-        "update_id"
-    )
+    update_id = payload.get("update_id")
 
     if type(update_id) is not int:
         raise HTTPException(
@@ -357,7 +447,6 @@ async def qstash_worker(request: Request):
             detail="Missing update ID",
         )
 
-    # Evvel islenmis Telegram mesajini tekrarlama.
     try:
         done = await asyncio.to_thread(
             already_processed,
@@ -380,18 +469,12 @@ async def qstash_worker(request: Request):
             "duplicate": True,
         }
 
-    # Movcud Telegram handlerlerini islet.
     from bot import create_application
 
     telegram_app = create_application()
 
-    telegram_app.bot_data[
-        "_worker_error"
-    ] = False
-
-    telegram_app.bot_data[
-        "_session_failed"
-    ] = False
+    telegram_app.bot_data["_worker_error"] = False
+    telegram_app.bot_data["_session_failed"] = False
 
     telegram_app.add_error_handler(
         capture_bot_error
@@ -409,7 +492,6 @@ async def qstash_worker(request: Request):
         )
 
     try:
-
         async with telegram_app:
 
             await telegram_app.start()
@@ -422,16 +504,12 @@ async def qstash_worker(request: Request):
             finally:
                 await telegram_app.stop()
 
-        if telegram_app.bot_data.get(
-            "_worker_error"
-        ):
+        if telegram_app.bot_data.get("_worker_error"):
             raise RuntimeError(
                 "Telegram handler failed"
             )
 
-        if telegram_app.bot_data.get(
-            "_session_failed"
-        ):
+        if telegram_app.bot_data.get("_session_failed"):
             raise RuntimeError(
                 "Session processing failed"
             )
