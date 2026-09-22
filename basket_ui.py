@@ -33,7 +33,8 @@ def basket_view(user_id, page=0):
     if not rows:
         return (
             "🧺 Ərzaqlarım\n\nSiyahın hələ boşdur.\n\n"
-            "Ərzaqları yaz və ya ⚡ Tez əlavə et bölməsindən seç.",
+            "Ərzaqları yaz və ya şəklini göndər. "
+            "İstəsən ⚡ Tez əlavə et bölməsindən də seç.",
             InlineKeyboardMarkup([
                 [button("➕ Ərzaq əlavə et", "pantry:add")],
                 [button("⚡ Tez əlavə et", "quick:open")],
@@ -230,7 +231,11 @@ async def basket_click(update, context):
         text, keyboard = basket_view(user_id, int(parts[2]))
     elif action == "add":
         await query.message.reply_text(
-            "➕ Ərzaqları yaz. Məsələn: Kartof, yumurta, pomidor"
+            "➕ Ərzaqlarını əlavə et\n\n"
+            "Adlarını vergüllə ayıraraq yaz və ya şəklini göndər. 📸\n"
+            "Birdən çox şəkil varsa, hər birini ayrıca göndər "
+            "və tanınan ərzaqları təsdiqlə.\n\n"
+            "Məsələn: Kartof, yumurta, pomidor"
         )
         return
     elif action == "recipe":

@@ -536,83 +536,84 @@ def help_view(section="main"):
     if section == "usage":
         text = (
             "📖 Necə istifadə olunur?\n\n"
-            "1. Ərzaqları yaz, şəkil göndər və ya "
-            "«⚡ Tez əlavə et» bölməsindən seç.\n"
-            "2. Şəkildən tanınan ərzaqları yoxla və təsdiqlə.\n"
-            "3. «🧺 Ərzaqlarım» bölməsində siyahını düzəlt.\n"
-            "4. «🍽️ Nə bişirim?» ilə reseptlərə bax."
+            "1. Evdəki ərzaqları vergüllə ayıraraq yaz, foto göndər "
+            "və ya «⚡ Tez əlavə et» bölməsindən seç.\n"
+            "2. Fotodan tanınan ərzaqları yoxla: istədiyini seç, "
+            "adını düzəlt, artıq olanı sil və təsdiqlə. "
+            "Hər şəkil ayrıca təsdiqlənir.\n"
+            "3. «🧺 Ərzaqlarım» bölməsində əlavə et, "
+            "adları dəyiş və ya lazımsız ərzaqları sil.\n"
+            "4. «🍽️ Nə bişirim?» bölməsində evdə olan "
+            "ərzaqlara uyğun reseptlərə bax.\n"
+            "5. Reseptin üzərinə basaraq hazırlanma qaydasını aç; "
+            "istəsən YouTube-da video axtar.\n\n"
+            "Qeyd: Fotodan tanınan ərzaqlar sən təsdiqləyənədək "
+            "səbətə əlavə olunmur."
         )
 
     elif section == "about":
         text = (
             "🤖 Bot haqqında\n\n"
-            "«Nə bişirim?» evdəki ərzaqlara əsasən "
-            "yemək ideyaları təklif edən Telegram botudur.\n\n"
-            "Şəkildən ərzaq tanımaq və resept hazırlamaq "
-            "üçün Gemini AI istifadə olunur.\n\n"
-            "AI səhv edə bilər. Ərzaqları və "
-            "resept addımlarını yoxlamağını tövsiyə edirik."
+            "«Nə bişirim?» evdə olan ərzaqlardan istifadə edərək "
+            "yemək ideyası tapmağa kömək edən Telegram botudur.\n\n"
+            "Ərzaqları mətnlə, foto ilə və ya hazır siyahıdan əlavə edə, "
+            "səbətini redaktə edə və reseptlərin hazırlanma "
+            "qaydalarına baxa bilərsən.\n\n"
+            "Fotolardakı ərzaqları tanımaq və bəzi reseptləri "
+            "hazırlamaq üçün Google Gemini süni intellekt "
+            "xidmətindən istifadə olunur.\n\n"
+            "AI bəzən səhv edə bilər. Məhsulları, miqdarları, "
+            "allergiya risklərini və bişirmə qaydalarını "
+            "özün də yoxla."
         )
 
     elif section == "privacy":
         text = (
             "🔐 Məxfilik və məlumatlarım\n\n"
-            "Bot Telegram istifadəçi ID-ni və təsdiqlənmiş "
-            "ərzaq siyahını lokal SQLite bazasında saxlayır.\n\n"
-            "Şəkil göndərdikdə foto tanınma üçün, "
-            "resept istədikdə isə ərzaq adların "
-            "Google-un Gemini API-sinə ötürülür.\n\n"
-            "Bot fotoşəkilləri ayrıca lokal fayl kimi saxlamır. "
-            "Telegram çatındakı mesajlar isə "
-            "«Hamısını sil» düyməsi ilə silinmir.\n\n"
-            "«Hamısını sil» yalnız ərzaqlarını silir; "
-            "istifadəçi ID-si bazada qalır. "
-            "Tam məlumat silmə funksiyası hələ hazırlanmayıb.\n\n"
-            "Geri qaytarma yalnız cari bot sessiyasında "
-            "və siyahı dəyişməyənədək mümkündür.\n\n"
-            "Google API-nin məlumatlardan istifadə qaydaları "
-            "hesabının xidmət səviyyəsindən asılıdır. "
-            "Şəxsi və həssas məlumatları fotoya daxil etmə."
+            "Botun işləməsi üçün Telegram istifadəçi ID-n, "
+            "təsdiqlədiyin ərzaqlar və söhbətin işləmə vəziyyəti "
+            "Neon PostgreSQL bazasında saxlanılır. "
+            "Təkrar sorğuları tanımaq üçün işlənmiş yeniləmə "
+            "ID-ləri də qeyd olunur.\n\n"
+            "Foto ilə ərzaq tanıtdıqda şəkil, AI-dan resept "
+            "istədikdə isə sorğu üçün lazım olan ərzaq "
+            "məlumatları Google Gemini xidmətinə göndərilə bilər. "
+            "Bu xidmətin məlumatları işləmə qaydaları ayrıca "
+            "tətbiq olunur.\n\n"
+            "«🗑️ Hamısını sil» yalnız səbətdəki ərzaqları silir. "
+            "İstifadəçi ID-si, sessiya və digər texniki qeydlər "
+            "bu düymə ilə silinmir. Tam hesab məlumatlarını "
+            "silmək üçün ayrıca funksiya hələ yoxdur.\n\n"
+            "Botun daxilində səbəti silmək Telegram söhbət "
+            "tarixçəsini silmir. Foto və mesajlarda şəxsi "
+            "və həssas məlumat paylaşmamağın tövsiyə olunur."
         )
 
     else:
         text = (
             "ℹ️ Kömək\n\n"
-            "Maraqlandığın bölməni seç:"
+            "Ərzaq əlavə etmə, reseptlər və məlumatların "
+            "işlənməsi barədə öyrənmək üçün bölmə seç:"
         )
 
         keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton(
-                    "📖 Necə istifadə olunur?",
-                    callback_data="help:usage",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "🤖 Bot haqqında",
-                    callback_data="help:about",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "🔐 Məxfilik və məlumatlarım",
-                    callback_data="help:privacy",
-                )
-            ],
+            [InlineKeyboardButton(
+                "📖 Necə istifadə olunur?", callback_data="help:usage"
+            )],
+            [InlineKeyboardButton(
+                "🤖 Bot haqqında", callback_data="help:about"
+            )],
+            [InlineKeyboardButton(
+                "🔐 Məxfilik və məlumatlarım", callback_data="help:privacy"
+            )],
         ])
-
         return text, keyboard
 
     keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(
-                "⬅️ Kömək menyusu",
-                callback_data="help:main",
-            )
-        ]
+        [InlineKeyboardButton(
+            "⬅️ Kömək menyusu", callback_data="help:main"
+        )]
     ])
-
     return text, keyboard
 
 
