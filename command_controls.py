@@ -29,6 +29,7 @@ TEMPORARY_KEYS = (
     "recipe_state",
     "recipe_message_id",
     "help_message_id",
+    "favorites_message_id",
 )
 
 

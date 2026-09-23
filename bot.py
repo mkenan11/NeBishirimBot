@@ -28,6 +28,7 @@ from ai_features import (
 )
 from recipes import recipe_start, recipe_click
 from session_bridge import install_session_handlers
+from favorites_ui import show_favorites, favorite_click
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "ingredients.db"
@@ -35,12 +36,11 @@ DB_PATH = BASE_DIR / "ingredients.db"
 MENU = ReplyKeyboardMarkup(
     [
         ["🧺 Ərzaqlarım", "🍽️ Nə bişirim?"],
-        ["ℹ️ Kömək"],
+        ["⭐ Seçilmiş reseptlər", "ℹ️ Kömək"],
     ],
     resize_keyboard=True,
     is_persistent=True,
 )
-
 KNOWN = {name.casefold() for name in STAPLES} | {
     name.casefold()
     for name in (
@@ -546,7 +546,10 @@ def help_view(section="main"):
             "4. «🍽️ Nə bişirim?» bölməsində evdə olan "
             "ərzaqlara uyğun reseptlərə bax.\n"
             "5. Reseptin üzərinə basaraq hazırlanma qaydasını aç; "
-            "istəsən YouTube-da video axtar.\n\n"
+            "istəsən YouTube-da video axtar.\n"
+            "6. Bəyəndiyin resepti «⭐ Seçilmişlərə əlavə et» "
+            "düyməsi ilə saxla. «⭐ Seçilmiş reseptlər» bölməsində "
+            "yenidən aça və ya silə bilərsən.\n\n"
             "Qeyd: Fotodan tanınan ərzaqlar sən təsdiqləyənədək "
             "səbətə əlavə olunmur."
         )
@@ -571,7 +574,7 @@ def help_view(section="main"):
         text = (
             "🔐 Məxfilik və məlumatlarım\n\n"
             "Botun işləməsi üçün Telegram istifadəçi ID-n, "
-            "təsdiqlədiyin ərzaqlar və söhbətin işləmə vəziyyəti "
+            "təsdiqlədiyin ərzaqlar, seçilmiş reseptlər və söhbətin işləmə vəziyyəti "
             "Neon PostgreSQL bazasında saxlanılır. "
             "Təkrar sorğuları tanımaq üçün işlənmiş yeniləmə "
             "ID-ləri də qeyd olunur.\n\n"
@@ -694,6 +697,10 @@ def create_application():
         CommandHandler("start", start)
     )
 
+    app.add_handler(
+        CommandHandler("favorites", show_favorites)
+    )
+
     # Bu handler umumi pantry handlerinden evvel olmalidir.
     app.add_handler(
         CallbackQueryHandler(
@@ -706,6 +713,13 @@ def create_application():
         CallbackQueryHandler(
             basket_click,
             pattern=r"^pantry:",
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            favorite_click,
+            pattern=r"^favorite:",
         )
     )
 
@@ -748,6 +762,13 @@ def create_application():
         MessageHandler(
             filters.Regex(r"^🧺 Ərzaqlarım$"),
             show_basket_clean,
+        )
+    )
+
+    app.add_handler(
+        MessageHandler(
+            filters.Regex(r"^⭐ Seçilmiş reseptlər$"),
+            show_favorites,
         )
     )
 

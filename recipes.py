@@ -1,6 +1,9 @@
 """Nə bişirim? — reseptlər. Səbət və foto modullarına toxunmur."""
 
+import asyncio
+import logging
 import re
+import secrets
 from urllib.parse import quote
 
 from pydantic import BaseModel
@@ -8,6 +11,10 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from ai_features import ask_gemini, api_error_message
 from basket_ui import basket_view, get_rows
+from favorites_store import save_favorite
+
+
+LOG = logging.getLogger(__name__)
 
 
 PAGE_SIZE = 5
@@ -1404,8 +1411,16 @@ def detail_text(recipe):
     return "\n".join(lines)
 
 
-def detail_keyboard(recipe):
-    return InlineKeyboardMarkup([
+def detail_keyboard(recipe, save_token=None):
+    rows = []
+    if save_token is not None:
+        rows.append([
+            btn(
+                "⭐ Seçilmişlərə əlavə et",
+                f"recipe:save:{save_token}",
+            )
+        ])
+    rows.extend([
         [
             InlineKeyboardButton(
                 "▶️ YouTube-da hazırlanmasına bax",
@@ -1427,6 +1442,7 @@ def detail_keyboard(recipe):
             )
         ],
     ])
+    return InlineKeyboardMarkup(rows)
 
 
 # ============================================================
@@ -1650,6 +1666,44 @@ async def recipe_click(update, context):
     view = state["views"][
         state["mode"]
     ]
+
+    if action == "save":
+        active = state.get("active_detail")
+        if (
+            len(parts) != 3
+            or not active
+            or parts[2] != active["token"]
+            or active["mode"] != state["mode"]
+            or active["page"] != view["page"]
+        ):
+            await q.message.reply_text(
+                "Bu resept düyməsi köhnəlib. Resepti yenidən aç."
+            )
+            return
+
+        full = view["details"].get((active["page"], active["index"]))
+        if full is None:
+            await q.message.reply_text("Resepti yenidən açıb yadda saxla.")
+            return
+
+        try:
+            _, created = await asyncio.to_thread(save_favorite, user_id, full)
+        except Exception:
+            LOG.exception("Resept secilmislere elave olunmadi.")
+            await q.message.reply_text(
+                "❌ Resept yadda saxlanmadı. Bir az sonra yenidən cəhd et."
+            )
+            return
+
+        await q.message.reply_text(
+            "⭐ Resept seçilmişlərə əlavə edildi."
+            if created
+            else "⭐ Bu resept artıq seçilmişlərindədir."
+        )
+        return
+
+    # Köhnə düymə sonradan açılan başqa resepti saxlamamalıdır.
+    state.pop("active_detail", None)
 
     # --------------------------------------------------------
     # REJİM DƏYİŞMƏ
@@ -1991,10 +2045,17 @@ async def recipe_click(update, context):
             # Gemini-yə yeni sorğu göndərilmir.
             view["details"][cache_key] = full
 
+        save_token = secrets.token_hex(8)
         await q.edit_message_text(
             detail_text(full),
-            reply_markup=detail_keyboard(full),
+            reply_markup=detail_keyboard(full, save_token),
         )
+        state["active_detail"] = {
+            "token": save_token,
+            "mode": state["mode"],
+            "page": view["page"],
+            "index": index,
+        }
         return
 
     # --------------------------------------------------------
