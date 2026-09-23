@@ -175,6 +175,19 @@ def save_favorite(user_id, recipe):
         return int(existing[0]), False
 
 
+def is_favorite(user_id, recipe):
+    """Reseptin cari istifadəçinin seçilmişlərində olub-olmadığını yoxlayır."""
+    fingerprint = recipe_fingerprint(recipe)
+    with psycopg.connect(
+        _database_url(), connect_timeout=10, prepare_threshold=None,
+    ) as db:
+        row = db.execute(
+            "SELECT 1 FROM favorite_recipes WHERE user_id = %s AND fingerprint = %s",
+            (int(user_id), fingerprint),
+        ).fetchone()
+    return row is not None
+
+
 def list_favorites(user_id, limit=50, offset=0):
     """
     Istifadecinin secilmis reseptlerini getirir.

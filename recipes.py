@@ -8,10 +8,11 @@ from urllib.parse import quote
 
 from pydantic import BaseModel
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import BadRequest
 
 from ai_features import ask_gemini, api_error_message
 from basket_ui import basket_view, get_rows
-from favorites_store import save_favorite
+from favorites_store import is_favorite, save_favorite
 
 
 LOG = logging.getLogger(__name__)
@@ -1286,7 +1287,7 @@ def summary_keyboard(view):
 # TAM RESEPT EKRANI
 # ============================================================
 
-def detail_text(recipe):
+def detail_text(recipe, compact_missing=False):
     r = recipe
 
     time_text = (
@@ -1327,8 +1328,9 @@ def detail_text(recipe):
     if r["missing"]:
         lines.extend([
             "",
-            "🛒 Alınacaq: "
-            + ", ".join(r["missing"]),
+            "🛒 İşarəli ərzaqlar səbətində yoxdur."
+            if compact_missing
+            else "🛒 Alınacaq: " + ", ".join(r["missing"]),
         ])
 
     lines.extend([
@@ -1411,12 +1413,12 @@ def detail_text(recipe):
     return "\n".join(lines)
 
 
-def detail_keyboard(recipe, save_token=None):
+def detail_keyboard(recipe, save_token=None, saved=False):
     rows = []
     if save_token is not None:
         rows.append([
             btn(
-                "⭐ Seçilmişlərə əlavə et",
+                "✅ Seçilmişlərdədir" if saved else "⭐ Seçilmişlərə əlavə et",
                 f"recipe:save:{save_token}",
             )
         ])
@@ -1600,8 +1602,6 @@ async def recipe_click(update, context):
         )
         return
 
-    await q.answer()
-
     parts = q.data.split(":")
 
     action = (
@@ -1609,6 +1609,9 @@ async def recipe_click(update, context):
         if len(parts) > 1
         else ""
     )
+
+    if action != "save":
+        await q.answer()
 
     # --------------------------------------------------------
     # SƏBƏT
@@ -1643,6 +1646,8 @@ async def recipe_click(update, context):
     )
 
     if not state:
+        if action == "save":
+            await q.answer("Resepti yenidən aç.", show_alert=True)
         await q.edit_message_text(
             "Resept axtarışını yenidən başlat."
         )
@@ -1652,6 +1657,8 @@ async def recipe_click(update, context):
         tuple(get_rows(user_id))
         != state["basket"]
     ):
+        if action == "save":
+            await q.answer("Səbət dəyişib. Reseptləri yenidən axtar.", show_alert=True)
         context.user_data.pop(
             "recipe_state",
             None,
@@ -1676,30 +1683,40 @@ async def recipe_click(update, context):
             or active["mode"] != state["mode"]
             or active["page"] != view["page"]
         ):
-            await q.message.reply_text(
-                "Bu resept düyməsi köhnəlib. Resepti yenidən aç."
+            await q.answer(
+                "Bu resept düyməsi köhnəlib. Resepti yenidən aç.", show_alert=True,
             )
             return
 
         full = view["details"].get((active["page"], active["index"]))
         if full is None:
-            await q.message.reply_text("Resepti yenidən açıb yadda saxla.")
+            await q.answer("Resepti yenidən açıb yadda saxla.", show_alert=True)
+            return
+
+        if active.get("saved"):
+            await q.answer("Bu resept artıq seçilmişlərindədir.")
             return
 
         try:
-            _, created = await asyncio.to_thread(save_favorite, user_id, full)
+            await asyncio.to_thread(save_favorite, user_id, full)
         except Exception:
             LOG.exception("Resept secilmislere elave olunmadi.")
-            await q.message.reply_text(
-                "❌ Resept yadda saxlanmadı. Bir az sonra yenidən cəhd et."
+            await q.answer(
+                "Resept yadda saxlanmadı. Bir az sonra yenidən cəhd et.",
+                show_alert=True,
             )
             return
 
-        await q.message.reply_text(
-            "⭐ Resept seçilmişlərə əlavə edildi."
-            if created
-            else "⭐ Bu resept artıq seçilmişlərindədir."
-        )
+        await q.answer()
+        try:
+            await q.edit_message_reply_markup(
+                reply_markup=detail_keyboard(full, active["token"], saved=True),
+            )
+        except BadRequest as error:
+            # Telegram dəyişib, sessiya yazılmayıbsa retry eyni düyməni göstərə bilər.
+            if "message is not modified" not in str(error).lower():
+                raise
+        active["saved"] = True
         return
 
     # Köhnə düymə sonradan açılan başqa resepti saxlamamalıdır.
@@ -2046,15 +2063,21 @@ async def recipe_click(update, context):
             view["details"][cache_key] = full
 
         save_token = secrets.token_hex(8)
+        try:
+            saved = await asyncio.to_thread(is_favorite, user_id, full)
+        except Exception:
+            LOG.exception("Reseptin secilmis veziyyeti yoxlanmadi.")
+            saved = False  # Saxlama yenə bazanın unikal məhdudiyyəti ilə qorunur.
         await q.edit_message_text(
             detail_text(full),
-            reply_markup=detail_keyboard(full, save_token),
+            reply_markup=detail_keyboard(full, save_token, saved=saved),
         )
         state["active_detail"] = {
             "token": save_token,
             "mode": state["mode"],
             "page": view["page"],
             "index": index,
+            "saved": saved,
         }
         return
 

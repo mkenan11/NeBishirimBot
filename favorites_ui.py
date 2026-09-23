@@ -11,7 +11,8 @@ from favorites_store import (
     get_favorite,
     list_favorites,
 )
-from recipes import detail_text, video_url
+from recipes import detail_text, video_url, key
+from basket_ui import get_rows
 from command_controls import clear_pending_operations
 
 
@@ -290,8 +291,19 @@ async def favorite_click(update, context):
         if action == "open":
             await query.answer()
 
+            rows = await asyncio.to_thread(get_rows, user_id)
+            available = {key(row[1]) for row in rows} | {"su"}
+            # Yalnız ekran yenilənir; saxlanmış orijinal resept dəyişmir.
+            recipe = dict(recipe, missing=[
+                item["name"] for item in recipe["ingredients"]
+                if key(item["name"]) not in available
+            ])
+            text = detail_text(recipe)
+            if len(text) > 3900:
+                text = detail_text(recipe, compact_missing=True)
+
             await query.edit_message_text(
-                detail_text(recipe),
+                text,
                 reply_markup=favorite_detail_keyboard(
                     recipe_id,
                     page,
