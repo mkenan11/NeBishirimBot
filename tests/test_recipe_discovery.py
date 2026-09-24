@@ -55,6 +55,16 @@ class DiscoveryInteractionTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         fixtures.FavoritesFlowTests.setUp(self)
 
+    async def test_initial_timeout_keeps_retry_menu_and_state(self):
+        status = SimpleNamespace(message_id=42, edit_text=AsyncMock())
+        update = SimpleNamespace(callback_query=None, effective_user=SimpleNamespace(id=123),
+                                 message=SimpleNamespace(reply_text=AsyncMock(return_value=status)))
+        with patch.object(recipes,"fill",new_callable=AsyncMock,side_effect=TimeoutError):
+            await recipes.recipe_start(update,self.context)
+        self.assertIn("recipe_state",self.context.user_data)
+        markup=status.edit_text.call_args.kwargs["reply_markup"]
+        self.assertIn("recipe:complete",[b.callback_data for row in markup.inline_keyboard for b in row])
+
     async def test_new_search_resets_defaults_but_mode_changes_keep_current_choices(self):
         self.context.user_data["recipe_preferences"] = {"time_limit": 90, "servings": 4}
         status = SimpleNamespace(message_id=42, edit_text=AsyncMock())

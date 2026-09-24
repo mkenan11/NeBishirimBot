@@ -528,6 +528,7 @@ def help_view(section="main"):
             "«Bütün təkliflər» 3 evdəki, 1 tək əlavə və 1 iki əlavə ərzaqlı resept seçir. "
             "«Əlavə 1–2 ərzaqla» isə 3 tək əlavə və 2 iki əlavə ərzaqlı resept seçir. "
             "Uyğun resept tapılmasa və ya vaxt filtri siyahını azaltsa, çatışmayan qrup göstərilir. "
+            "İlk nəticələrdən sonra «Qalan təklifləri tamamla» ilə həmin səhifəni doldura bilərsən. "
             "«Başqa təkliflər» cari seçimlərinə uyğun yeni yeməklər axtarır.\n\n"
             "Qeyd: Fotodan tanınan ərzaqlar sən təsdiqləyənədək "
             "səbətə əlavə olunmur."

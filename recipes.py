@@ -23,7 +23,8 @@ LOG = logging.getLogger(__name__)
 
 PAGE_SIZE = 5
 MAX_PAGES = 10
-MAX_REFILL = 4
+MAX_REFILL = 1
+SEARCH_TIMEOUT_SECONDS = 20
 
 MODE_ALL, MODE_HOME, MODE_SHOP = "all", "owned", "extra"
 
@@ -340,14 +341,14 @@ def quotas(mode):
     return {0: 5} if mode == MODE_HOME else {1: 3, 2: 2} if mode == MODE_SHOP else {0: 3, 1: 1, 2: 1}
 
 
-def deficits(pool, mode):
+def deficits(pool, mode, slots=None):
     return {count: max(0, needed - sum(len(x["missing"]) == count for x in pool))
-            for count, needed in quotas(mode).items()}
+            for count, needed in (quotas(mode) if slots is None else slots).items()}
 
 
-def pick(pool, mode):
+def pick(pool, mode, slots=None):
     selected, methods = [], {}
-    for count, needed in quotas(mode).items():
+    for count, needed in (quotas(mode) if slots is None else slots).items():
         choices = [x for x in pool if len(x["missing"]) == count]
         for _ in range(min(needed, len(choices))):
             chosen = min(choices, key=lambda x: methods.get(method_key(x["method"]), 0))
@@ -390,6 +391,7 @@ async def candidates(
     time_limit=0,
     servings=2,
     missing_target=None,
+    requested_counts=None,
 ):
     if target == MODE_HOME:
         goal = (
@@ -433,6 +435,11 @@ async def candidates(
             "uyğun resept yoxdursa məcburi deyil."
         )
 
+    if requested_counts:
+        goal += " Lazım olan yerlər: " + "; ".join(
+            f"{number} resept, {count} əlavə ərzaqla" for count, number in requested_counts.items() if number
+        ) + ". Uyğun olarsa bütün bu qrupları eyni cavabda tamamla."
+
     prompt = (
         "Sən «Nə bişirim?» üçün Azərbaycan dilində "
         "yemək ideyaları verirsən.\n"
@@ -466,7 +473,7 @@ async def candidates(
                     for method, items in sorted(signatures, key=lambda s: (s[0], sorted(s[1])))[:60])
         + "\n"
 
-        + "Ən çox 14 müxtəlif REAL yemək namizədi təklif et; "
+        + "Ən çox 8 müxtəlif REAL yemək namizədi təklif et; "
         "uydurma yeməklərlə say artırma. "
 
         "Namizədləri balanslı seç: təxminən 2 sadə və etibarlı, "
@@ -544,6 +551,7 @@ async def candidates(
         prompt,
         ShortBatch,
         temperature=0.7,
+        request_timeout_ms=10000,
     )
 
     return clean_short(
@@ -563,25 +571,26 @@ async def fill(
     mode,
     time_limit=0,
     servings=2,
+    slots=None,
 ):
     deferred = [x for x in pool if not matches_time(x["minutes"], time_limit)]
     pool = [x for x in pool if matches_time(x["minutes"], time_limit)]
     history = set(history)
     signatures = set(signatures)
 
-    attempts = {0: 0, 1: 0, 2: 0}
-    deadline = asyncio.get_running_loop().time() + 120
+    deadline = asyncio.get_running_loop().time() + SEARCH_TIMEOUT_SECONDS
+    # Show useful cached candidates immediately. Explicit completion may fetch
+    # one batch for the remaining slots, never loop to force a full page.
+    cached, _ = pick(pool, mode, slots)
+    if cached and slots is None:
+        selected, remainder = pick(pool, mode)
+        return selected, remainder + deferred, history, signatures
     for attempt in range(MAX_REFILL):
-        missing = {count: n for count, n in deficits(pool, mode).items() if n}
+        missing = {count: n for count, n in deficits(pool, mode, slots).items() if n}
         if not missing:
             break
-        if attempt == 0 and not pool and mode == MODE_ALL:
-            target, missing_target = MODE_ALL, None
-        else:
-            count = min(missing, key=lambda n: (attempts[n], -missing[n], n))
-            attempts[count] += 1
-            target = MODE_HOME if count == 0 else MODE_SHOP
-            missing_target = count if count else None
+        target = MODE_ALL if 0 in missing and len(missing) > 1 else MODE_HOME if 0 in missing else MODE_SHOP
+        missing_target = next(iter(missing)) if target == MODE_SHOP and len(missing) == 1 else None
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
             break
@@ -597,6 +606,7 @@ async def fill(
                 time_limit,
                 servings,
                 missing_target=missing_target,
+                requested_counts=missing,
             ), timeout=remaining)
 
         except Exception:
@@ -621,6 +631,7 @@ async def fill(
     selected, remainder = pick(
         pool,
         mode,
+        slots,
     )
     remainder.extend(deferred)
 
@@ -1360,6 +1371,10 @@ def summary_keyboard(view):
     if navigation:
         rows.append(navigation)
 
+    if any(deficits(view["pages"][view["page"]], view["mode"]).values()):
+        label = "🔄 Qalan təklifləri tamamla" if view["pages"][view["page"]] else "🔄 Yenidən cəhd et"
+        rows.append([btn(label, "recipe:complete")])
+
     if not visible_recipes(view) and time_range(view.get("time_limit", 0)) and len(view["pages"]) < MAX_PAGES:
         rows.append([btn("🔍 Bu vaxta uyğun reseptlər tap", "recipe:findtime")])
 
@@ -1652,9 +1667,14 @@ async def recipe_start(update, context):
         )
 
     except Exception as error:
+        view = new_view(MODE_ALL, [], [], set(), set())
+        view.update(preferences)
+        context.user_data["recipe_state"] = {"basket": basket_rows, "mode": MODE_ALL,
+                                              "views": {MODE_ALL: view}}
         await status.edit_text(
             "❌ Resept axtarışı alınmadı. "
-            + api_error_message(error)
+            + api_error_message(error),
+            reply_markup=summary_keyboard(view),
         )
         return
 
@@ -2209,7 +2229,7 @@ async def recipe_click(update, context):
     # --------------------------------------------------------
 
     if (
-        action not in ("more", "findtime")
+        action not in ("more", "findtime", "complete")
         or (action == "more" and (view["exhausted"] or view["page"] != len(view["pages"]) - 1))
     ):
         return
@@ -2217,7 +2237,11 @@ async def recipe_click(update, context):
     if action == "findtime" and (visible_recipes(view) or not time_range(view.get("time_limit", 0))):
         return
 
-    if len(view["pages"]) >= MAX_PAGES:
+    if action != "complete" and len(view["pages"]) >= MAX_PAGES:
+        return
+
+    slots = deficits(view["pages"][view["page"]], view["mode"]) if action == "complete" else None
+    if slots is not None and not any(slots.values()):
         return
 
     await q.edit_message_text(
@@ -2242,6 +2266,7 @@ async def recipe_click(update, context):
             view["mode"],
             time_range(view.get("time_limit", 0)),
             view.get("servings", 2),
+            **({"slots": slots} if slots is not None else {}),
         )
 
     except Exception as error:
@@ -2287,8 +2312,12 @@ async def recipe_click(update, context):
 
     view["empty_runs"] = 0
 
-    view["pages"].append(recipes)
-    view["page"] = len(view["pages"]) - 1
+    if action == "complete":
+        # Append only: existing detail-cache and callback indices stay valid.
+        view["pages"][view["page"]].extend(recipes)
+    else:
+        view["pages"].append(recipes)
+        view["page"] = len(view["pages"]) - 1
 
     await q.edit_message_text(
         summary_text(view),

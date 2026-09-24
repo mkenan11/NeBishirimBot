@@ -1,5 +1,6 @@
 """Selection quotas, bounded refill, and stable presentation identities."""
 import unittest
+import asyncio
 from unittest.mock import AsyncMock, patch
 import recipes
 import test_favorites_flow as fixtures
@@ -57,7 +58,7 @@ class QuotaTests(unittest.TestCase):
 
 
 class RefillTests(unittest.IsolatedAsyncioTestCase):
-    async def test_initial_batch_then_each_missing_group_is_requested(self):
+    async def test_initial_partial_batch_returns_without_refill(self):
         async def generate(*args, **kwargs):
             target = kwargs.get("missing_target")
             if target == 1:
@@ -67,16 +68,17 @@ class RefillTests(unittest.IsolatedAsyncioTestCase):
             return [recipe(i) for i in range(3)]
         with patch.object(recipes, "candidates", side_effect=generate) as ai:
             selected, *_ = await recipes.fill([], [], set(), set(), 0, "all", 90, 2)
-        self.assertEqual([len(r["missing"]) for r in selected], [0,0,0,1,2])
-        self.assertEqual([c.kwargs["missing_target"] for c in ai.call_args_list], [None,1,2])
+        self.assertEqual([len(r["missing"]) for r in selected], [0,0,0])
+        self.assertEqual(ai.call_count, 1)
+        self.assertEqual(ai.call_args.kwargs["requested_counts"], {0:3,1:1,2:1})
 
-    async def test_impossible_one_group_does_not_starve_other_groups(self):
+    async def test_extra_mode_requests_both_groups_in_one_call(self):
         async def generate(*args, **kwargs):
-            return [recipe(6,2)] if kwargs.get("missing_target") == 2 else []
+            return [recipe(6,2)]
         with patch.object(recipes, "candidates", side_effect=generate) as ai:
             selected, *_ = await recipes.fill([], [], set(), set(), 0, "extra", 90, 2)
-        self.assertTrue(any(c.kwargs["missing_target"] == 2 for c in ai.call_args_list))
-        self.assertLessEqual(ai.call_count, recipes.MAX_REFILL)
+        self.assertEqual(ai.call_args.kwargs["requested_counts"], {1:3,2:2})
+        self.assertEqual(ai.call_count, 1)
         self.assertTrue(selected)
 
     async def test_timeout_preserves_existing_partial_results(self):
@@ -84,10 +86,38 @@ class RefillTests(unittest.IsolatedAsyncioTestCase):
             selected, *_ = await recipes.fill([], [recipe(0)], set(), set(), 0, "all", 90, 2)
         self.assertEqual(selected, [recipe(0)])
 
+    async def test_cached_results_return_without_network(self):
+        with patch.object(recipes, "candidates", new_callable=AsyncMock) as ai:
+            selected, *_ = await recipes.fill([], [recipe(0)], set(), set(), 0, "all", 90, 2)
+        ai.assert_not_awaited()
+        self.assertEqual(selected, [recipe(0)])
+
+    async def test_global_deadline_cancels_slow_generation(self):
+        cancelled = asyncio.Event()
+        async def slow(*args, **kwargs):
+            try:
+                await asyncio.sleep(5)
+            finally:
+                cancelled.set()
+        with patch.object(recipes,"SEARCH_TIMEOUT_SECONDS",0.01), patch.object(recipes,"candidates",side_effect=slow):
+            with self.assertRaises(TimeoutError):
+                await recipes.fill([],[],set(),set(),0,"all")
+        self.assertTrue(cancelled.is_set())
+
 
 class DetailGuardTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         fixtures.FavoritesFlowTests.setUp(self)
+
+    async def test_completion_appends_without_replacing_cached_recipe(self):
+        self.query.data = "recipe:complete"
+        with patch.object(recipes,"candidates",new_callable=AsyncMock,
+                          return_value=[recipe(1),recipe(2),recipe(3,1),recipe(4,2)]) as ai:
+            await recipes.recipe_click(self.update,self.context)
+        self.assertEqual(ai.call_args.kwargs["requested_counts"], {0:2,1:1,2:1})
+        self.assertEqual([len(r["missing"]) for r in self.view["pages"][0]], [0,0,0,1,2])
+        self.assertEqual(self.view["details"][(0,0)],self.full)
+        self.assertEqual(len(self.view["pages"]),1)
 
     async def test_generated_detail_cannot_mutate_page_group(self):
         self.view["details"].clear()

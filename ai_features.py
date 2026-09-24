@@ -91,6 +91,8 @@ def unique_names(values, limit=20):
 
 
 def api_error_message(error):
+    if isinstance(error, TimeoutError):
+        return "AI vaxtında cavab vermədi. Yenidən cəhd edə bilərsən."
     code = getattr(error, "code", None)
 
     if code == 429:
@@ -127,7 +129,7 @@ def api_error_message(error):
 # GEMINI: AVTOMATIK EHTIYAT MODEL
 # ============================================================
 
-async def ask_gemini(contents, schema, temperature=0.1):
+async def ask_gemini(contents, schema, temperature=0.1, request_timeout_ms=30000):
     api_key = os.getenv("GEMINI_API_KEY")
 
     if not api_key:
@@ -143,7 +145,7 @@ async def ask_gemini(contents, schema, temperature=0.1):
             # dovrunu sondururuk.
             # Model secimini ozumuz idare edirik.
             http_options = types.HttpOptions(
-                timeout=30000,
+                timeout=request_timeout_ms,
                 retry_options=types.HttpRetryOptions(
                     attempts=1,
                 ),

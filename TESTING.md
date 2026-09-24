@@ -10,10 +10,11 @@ Python sintaksisini, tətbiqin qurulmasını və avtomatik sınaqları yoxlayır
 ```
 
 Digər mühitlərdə `.\.venv\Scripts\python.exe` əvəzinə `python` istifadə et.
-63 şəbəkəsiz test seçilmişləri, menyu keçidlərini, resept yoxlamalarını,
+67 şəbəkəsiz test seçilmişləri, menyu keçidlərini, resept yoxlamalarını,
 porsiya və vaxt aralıqlarını, məqsədli axtarışı, təkrar təklifləri, ərzaq adlarını,
 köhnə alış-veriş düymələrinin bloklanmasını,
 3+1+1 və 3+2 bölgüsünü, üsul müxtəlifliyini, nömrə–düymə uyğunluğunu,
+qısa axtarış həddini, sorğunun ləğvini, ilk xətadan sonra təkrar cəhdi,
 çatışmayan qrupların tamamlanmasını və tam reseptdə ərzaq bölgüsünün qorunmasını,
 silinmə təsdiqini və worker-in təkrar sorğulara davranışını yoxlayır.
 Telegram və Gemini çağırışları əvəzlənir; real API açarları lazım deyil.
