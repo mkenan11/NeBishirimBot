@@ -3,6 +3,8 @@ import database as sqlite3
 from pathlib import Path
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from command_controls import clear_pending_operations
+from ingredient_names import normalize_name, ingredient_key
 
 DB_PATH = Path(__file__).resolve().parent / "ingredients.db"
 PAGE_SIZE = 10
@@ -138,11 +140,7 @@ def delete_view(user_id, state):
 
 async def show_basket(update, context):
     user_id = update.effective_user.id
-    for key in (
-        "delete_state", "rename_target", "quick_selected", "quick_page",
-        "clear_state", "pending_names", "pending_message_id",
-    ):
-        context.user_data.pop(key, None)
+    clear_pending_operations(context, keep=("undo",))
     text, keyboard = basket_view(user_id)
     message = await update.message.reply_text(text, reply_markup=keyboard)
     context.user_data["basket_message_id"] = message.message_id
@@ -168,7 +166,10 @@ async def handle_rename_text(update, context):
         )
         return
 
-    new_name = new_name[0].upper() + new_name[1:].lower()
+    new_name = normalize_name(new_name)
+    if new_name is None:
+        await update.message.reply_text("Ərzaq adını yenidən yaz.")
+        return
     normalized = new_name.casefold()
     changed = False
     with sqlite3.connect(DB_PATH) as db:
@@ -183,11 +184,12 @@ async def handle_rename_text(update, context):
             await update.message.reply_text("Siyahı dəyişib. Ad dəyişməni yenidən başlat.")
             await show_basket(update, context)
             return
-        duplicate = db.execute(
-            """SELECT 1 FROM ingredients WHERE user_id = ?
-               AND normalized_name = ? AND id != ?""",
-            (user_id, normalized, state["id"]),
-        ).fetchone()
+        duplicate = any(
+            item_id != state["id"] and ingredient_key(name) == ingredient_key(new_name)
+            for item_id, name in db.execute(
+                "SELECT id, name FROM ingredients WHERE user_id = ?", (user_id,),
+            ).fetchall()
+        )
         if duplicate:
             db.rollback()
             await update.message.reply_text(
@@ -230,6 +232,7 @@ async def basket_click(update, context):
     if action == "page":
         text, keyboard = basket_view(user_id, int(parts[2]))
     elif action == "add":
+        clear_pending_operations(context, keep=("basket_message_id",))
         await query.message.reply_text(
             "➕ Ərzaqlarını əlavə et\n\n"
             "Adlarını vergüllə ayıraraq yaz və ya şəklini göndər. 📸\n"

@@ -17,6 +17,19 @@ jobs:
     name: Python tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ne_bishirim_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Check out code
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -47,3 +60,8 @@ jobs:
 
       - name: Run offline regression tests
         run: python -B -m unittest discover -s tests -v
+
+      - name: Run PostgreSQL integration tests
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/ne_bishirim_test
+        run: python -B -m unittest discover -s tests -p test_database_integration.py -v

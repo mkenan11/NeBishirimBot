@@ -13,6 +13,10 @@ from telegram.error import BadRequest
 from ai_features import ask_gemini, api_error_message
 from basket_ui import basket_view, get_rows
 from favorites_store import is_favorite, save_favorite
+from command_controls import clear_pending_operations
+from ingredient_names import ingredient_key, normalize_name
+from shopping_store import add_items
+from ui_utils import edit_query, edit_markup
 
 
 LOG = logging.getLogger(__name__)
@@ -99,9 +103,7 @@ def norm(value):
 
 
 def key(value):
-    result = norm(value)
-    return "su" if result in WATER else result
-
+    return ingredient_key(value)
 
 def valid(value):
     return (
@@ -635,7 +637,7 @@ def forbidden_washing(text):
 # TAM RESEPTİN YOXLAMASI
 # ============================================================
 
-def validate_full(raw, short, basket, species):
+def validate_full(raw, short, basket, species, servings=2):
     if (
         norm(raw.name) != norm(short["name"])
         or norm(raw.method) != norm(short["method"])
@@ -656,9 +658,10 @@ def validate_full(raw, short, basket, species):
         )
 
     if (
-        raw.servings != 2
+        servings not in (1, 2, 4)
+        or raw.servings != servings
         or not 0 <= raw.prep_minutes <= 180
-        or not 1 <= raw.cook_minutes <= 240
+        or not 0 <= raw.cook_minutes <= 240
     ):
         raise ValueError(
             "Vaxt və ya porsiya uyğun deyil."
@@ -676,9 +679,9 @@ def validate_full(raw, short, basket, species):
     )
 
     if (
-        total > 300
+        not 1 <= total <= 300
         or not 2 <= len(raw.ingredients) <= 16
-        or not 6 <= len(raw.steps) <= 10
+        or not (3 if raw.cook_minutes == 0 else 6) <= len(raw.steps) <= 10
     ):
         raise ValueError(
             "Reseptin strukturu düzgün deyil."
@@ -688,9 +691,7 @@ def validate_full(raw, short, basket, species):
     seen = set()
 
     for item in raw.ingredients:
-        name = " ".join(
-            item.name.split()
-        )
+        name = normalize_name(item.name) or ""
 
         quantity = " ".join(
             item.quantity.split()
@@ -796,6 +797,14 @@ def validate_full(raw, short, basket, species):
         )
 
         steps.append(instruction)
+
+    if usage != seen:
+        raise ValueError("Bəzi ərzaqlar addımlarda istifadə olunmur: " + ", ".join(sorted(seen - usage)))
+    if raw.cook_minutes == 0 and (any(
+        word in name for name in seen
+        for word in ("toyuq", "hinduşka", "balıq", "əti", "qiymə", "yumurta")
+    ) or "ət" in seen):
+        raise ValueError("Bu ərzaqlar üçün bişirmə mərhələsi dəqiqləşdirilməlidir.")
 
     if timing == 0 and raw.cook_minutes >= 15:
         raise ValueError(
@@ -964,6 +973,7 @@ def validate_full(raw, short, basket, species):
         "poultry": poultry,
         "fish": fish,
         "species": species,
+        "servings": servings,
     }
 
     if len(detail_text(detail)) > 3900:
@@ -978,7 +988,7 @@ def validate_full(raw, short, basket, species):
 # TAM RESEPTİN GENERASİYASI
 # ============================================================
 
-async def make_full(short, basket, species=None):
+async def make_full(short, basket, species=None, servings=2):
     if (
         meat_choice(short)
         and species not in (
@@ -1029,8 +1039,12 @@ async def make_full(short, basket, species=None):
         "name və method sahələrini eynilə saxla. "
         "Yeməyi başqa üsula çevirmə. "
 
-        "2 nəfərlik real təxmini miqdarlar; "
-        "6–10 konkret addım yaz. "
+        f"{servings} nəfərlik real təxmini miqdarlar; "
+        "isti yeməklərdə 6–10, bişirilməyən salatlarda 3–6 konkret addım yaz. "
+        "Bişirilməyən yemək üçün cook_minutes=0 ola bilər. "
+        "Porsiya sayına uyğun həm miqdarları, həm addımlardakı sayları uyğunlaşdır. "
+        "Temperaturu və müddəti porsiya sayına vurma. "
+        "Hər ərzaq ən azı bir addımın uses siyahısında istifadə olunsun. "
 
         "Miqdarın səbətdə kifayət etdiyini iddia etmə. "
         "İlk ərzaqların HAMISI qalsın. "
@@ -1120,6 +1134,7 @@ async def make_full(short, basket, species=None):
                 short,
                 basket,
                 species,
+                servings,
             )
 
         except ValueError as error:
@@ -1132,6 +1147,12 @@ async def make_full(short, basket, species=None):
 # ƏVVƏLKİ SADƏ SİYAHI DİZAYNI
 # ============================================================
 
+def visible_recipes(view):
+    limit = view.get("time_limit", 0)
+    return [(i, recipe) for i, recipe in enumerate(view["pages"][view["page"]])
+            if not limit or recipe["minutes"] <= limit]
+
+
 def summary_text(view):
     recipes = view["pages"][view["page"]]
 
@@ -1139,10 +1160,11 @@ def summary_text(view):
         "🍽️ Nə bişirim?",
         "",
         "Seçim: " + MODE_NAMES[view["mode"]],
+        f"👥 {view.get('servings', 2)} nəfərlik · ⏱️ " + (f"{view['time_limit']} dəq-dək" if view.get('time_limit') else "Vaxt limiti yoxdur"),
         (
             f"Səhifə {view['page'] + 1}/"
             f"{len(view['pages'])} · "
-            f"{len(recipes)} təklif"
+            f"{len(visible_recipes(view))} təklif"
         ),
         "",
     ]
@@ -1155,7 +1177,7 @@ def summary_text(view):
     for header, has_missing in groups:
         group = [
             (i, recipe)
-            for i, recipe in enumerate(recipes)
+            for i, recipe in visible_recipes(view)
             if bool(recipe["missing"]) == has_missing
         ]
 
@@ -1182,8 +1204,10 @@ def summary_text(view):
 
         lines.append("")
 
+    if not visible_recipes(view):
+        lines.append("Bu səhifədə vaxt limitinə uyğun təklif yoxdur. Limiti dəyiş və ya başqa reseptlərə bax.")
     lines.append(
-        "ℹ️ Səbətdə miqdar yoxdur. "
+        "ℹ️ Vaxt filtri mövcud təkliflərə tətbiq olunur. Səbətdə miqdar yoxdur. "
         "Reseptdə yazılan miqdarları evdə yoxla."
     )
 
@@ -1231,8 +1255,15 @@ def summary_keyboard(view):
         ],
     ]
 
-    # Əvvəlki dizayn: reseptin adı tam enli düymədə.
-    for i, recipe in enumerate(recipes):
+    rows.append([
+        btn(("● " if view.get("time_limit", 0) == value else "") + label, f"recipe:time:{value}")
+        for value, label in ((0, "⏱️ Hamısı"), (30, "≤30 dəq"), (60, "≤60 dəq"))
+    ])
+    rows.append([
+        btn(("● " if view.get("servings", 2) == value else "") + f"👥 {value} nəfər", f"recipe:servings:{value}")
+        for value in (1, 2, 4)
+    ])
+    for i, recipe in visible_recipes(view):
         rows.append([
             btn(
                 f"📖 {i + 1}. {recipe['name']}"[:55],
@@ -1306,7 +1337,7 @@ def detail_text(recipe, compact_missing=False):
     lines = [
         "📖 " + r["name"],
         "",
-        "👥 2 nəfərlik · miqdarlar təxminidir",
+        f"👥 {r.get('servings', 2)} nəfərlik · miqdarlar təxminidir",
         time_text,
         "🔥 Üsul: " + r["method"],
         "",
@@ -1413,7 +1444,7 @@ def detail_text(recipe, compact_missing=False):
     return "\n".join(lines)
 
 
-def detail_keyboard(recipe, save_token=None, saved=False):
+def detail_keyboard(recipe, save_token=None, saved=False, shopping_added=False):
     rows = []
     if save_token is not None:
         rows.append([
@@ -1422,6 +1453,11 @@ def detail_keyboard(recipe, save_token=None, saved=False):
                 f"recipe:save:{save_token}",
             )
         ])
+    if save_token is not None and recipe["missing"]:
+        rows.append([btn(
+            "✅ Alış-veriş siyahısındadır" if shopping_added else "🛒 Alınacaqları siyahıya əlavə et",
+            f"recipe:shop:{save_token}",
+        )])
     rows.extend([
         [
             InlineKeyboardButton(
@@ -1468,6 +1504,8 @@ def new_view(
         "details": {},
         "exhausted": False,
         "empty_runs": 0,
+        "time_limit": 0,
+        "servings": 2,
     }
 
 
@@ -1498,6 +1536,7 @@ async def recipe_start(update, context):
         else update.message
     )
 
+    clear_pending_operations(context)
     user_id = update.effective_user.id
 
     basket_rows = tuple(
@@ -1569,6 +1608,8 @@ async def recipe_start(update, context):
         signatures,
     )
 
+    view.update(context.user_data.get("recipe_preferences", {}))
+
     context.user_data["recipe_state"] = {
         "basket": basket_rows,
         "mode": MODE_ALL,
@@ -1610,7 +1651,7 @@ async def recipe_click(update, context):
         else ""
     )
 
-    if action != "save":
+    if action not in ("save", "shop"):
         await q.answer()
 
     # --------------------------------------------------------
@@ -1629,10 +1670,7 @@ async def recipe_click(update, context):
             None,
         )
 
-        context.user_data.pop(
-            "recipe_state",
-            None,
-        )
+        clear_pending_operations(context, keep=("basket_message_id",))
 
         await q.edit_message_text(
             text,
@@ -1646,7 +1684,7 @@ async def recipe_click(update, context):
     )
 
     if not state:
-        if action == "save":
+        if action in ("save", "shop"):
             await q.answer("Resepti yenidən aç.", show_alert=True)
         await q.edit_message_text(
             "Resept axtarışını yenidən başlat."
@@ -1657,7 +1695,7 @@ async def recipe_click(update, context):
         tuple(get_rows(user_id))
         != state["basket"]
     ):
-        if action == "save":
+        if action in ("save", "shop"):
             await q.answer("Səbət dəyişib. Reseptləri yenidən axtar.", show_alert=True)
         context.user_data.pop(
             "recipe_state",
@@ -1674,7 +1712,7 @@ async def recipe_click(update, context):
         state["mode"]
     ]
 
-    if action == "save":
+    if action in ("save", "shop"):
         active = state.get("active_detail")
         if (
             len(parts) != 3
@@ -1688,9 +1726,21 @@ async def recipe_click(update, context):
             )
             return
 
-        full = view["details"].get((active["page"], active["index"]))
+        full = view["details"].get(active.get("cache_key", (active["page"], active["index"])))
         if full is None:
             await q.answer("Resepti yenidən açıb yadda saxla.", show_alert=True)
+            return
+
+        if action == "shop":
+            try:
+                await asyncio.to_thread(add_items, user_id, full["missing"])
+            except ValueError as error:
+                await q.answer(str(error), show_alert=True)
+                return
+            await q.answer()
+            await edit_markup(q, detail_keyboard(
+                full, active["token"], saved=active.get("saved", False), shopping_added=True))
+            active["shopping_added"] = True
             return
 
         if active.get("saved"):
@@ -1710,7 +1760,7 @@ async def recipe_click(update, context):
         await q.answer()
         try:
             await q.edit_message_reply_markup(
-                reply_markup=detail_keyboard(full, active["token"], saved=True),
+                reply_markup=detail_keyboard(full, active["token"], saved=True, shopping_added=active.get("shopping_added", False)),
             )
         except BadRequest as error:
             # Telegram dəyişib, sessiya yazılmayıbsa retry eyni düyməni göstərə bilər.
@@ -1721,6 +1771,19 @@ async def recipe_click(update, context):
 
     # Köhnə düymə sonradan açılan başqa resepti saxlamamalıdır.
     state.pop("active_detail", None)
+
+    if action in ("time", "servings"):
+        allowed = (0, 30, 60) if action == "time" else (1, 2, 4)
+        if len(parts) != 3 or not parts[2].isdigit() or int(parts[2]) not in allowed:
+            return
+        setting = "time_limit" if action == "time" else "servings"
+        value = int(parts[2])
+        for other_view in state["views"].values():
+            other_view[setting] = value
+        context.user_data.setdefault("recipe_preferences", {})[setting] = value
+        state.pop("pending_meat", None)
+        await edit_query(q, summary_text(view), summary_keyboard(view))
+        return
 
     # --------------------------------------------------------
     # REJİM DƏYİŞMƏ
@@ -1812,6 +1875,7 @@ async def recipe_click(update, context):
         state["mode"] = mode
 
         chosen = state["views"][mode]
+        chosen.update(context.user_data.get("recipe_preferences", {}))
 
         await q.edit_message_text(
             summary_text(chosen),
@@ -1932,10 +1996,8 @@ async def recipe_click(update, context):
         if not 0 <= index < len(recipes):
             return
 
-        cache_key = (
-            view["page"],
-            index,
-        )
+        servings = view.get("servings", 2)
+        cache_key = (view["page"], index) if servings == 2 else (view["page"], index, servings)
 
         full = view["details"].get(
             cache_key
@@ -1995,6 +2057,7 @@ async def recipe_click(update, context):
                         for row in state["basket"]
                     ],
                     species,
+                    servings,
                 )
 
             except ValueError:
@@ -2062,6 +2125,10 @@ async def recipe_click(update, context):
             # Gemini-yə yeni sorğu göndərilmir.
             view["details"][cache_key] = full
 
+        recipes[index]["minutes"] = full["total"]
+        if view.get("time_limit") and full["total"] > view["time_limit"]:
+            await edit_query(q, "Bu porsiya üçün dəqiqləşən vaxt limitdən uzundur.\n\n" + summary_text(view), summary_keyboard(view))
+            return
         save_token = secrets.token_hex(8)
         try:
             saved = await asyncio.to_thread(is_favorite, user_id, full)
@@ -2078,6 +2145,7 @@ async def recipe_click(update, context):
             "page": view["page"],
             "index": index,
             "saved": saved,
+            "cache_key": cache_key,
         }
         return
 

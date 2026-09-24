@@ -7,12 +7,12 @@ import logging
 import os
 
 import httpx
-import psycopg
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from qstash import Receiver
 from telegram import Update
+from delivery_store import claim_update, finish_update, release_update
 
 
 load_dotenv()
@@ -191,66 +191,6 @@ async def telegram_webhook(request: Request):
         "ok": True,
         "queued": True,
     }
-
-
-# ============================================================
-# TEKRAR MESAJLARIN YOXLANMASI
-# ============================================================
-
-def already_processed(update_id):
-
-    with psycopg.connect(
-        required_env("DATABASE_URL"),
-        connect_timeout=10,
-        prepare_threshold=None,
-    ) as db:
-
-        row = db.execute(
-            """
-            SELECT 1
-            FROM processed_updates
-            WHERE update_id = %s
-            """,
-            (update_id,),
-        ).fetchone()
-
-    return row is not None
-
-
-def mark_processed(update_id, user_id):
-
-    with psycopg.connect(
-        required_env("DATABASE_URL"),
-        connect_timeout=10,
-        prepare_threshold=None,
-    ) as db:
-
-        db.execute(
-            """
-            INSERT INTO processed_updates
-                (update_id, user_id)
-            VALUES (%s, %s)
-            ON CONFLICT (update_id)
-            DO NOTHING
-            """,
-            (update_id, user_id),
-        )
-
-
-# ============================================================
-# TELEGRAM HANDLER XETALARI
-# ============================================================
-
-async def capture_bot_error(update, context):
-
-    context.application.bot_data[
-        "_worker_error"
-    ] = True
-
-    LOG.error(
-        "Telegram handler failed: %s",
-        type(context.error).__name__,
-    )
 
 
 # ============================================================
@@ -447,38 +387,12 @@ async def qstash_worker(request: Request):
             detail="Missing update ID",
         )
 
-    try:
-        done = await asyncio.to_thread(
-            already_processed,
-            update_id,
-        )
-
-    except Exception:
-        LOG.exception(
-            "Processed update lookup failed"
-        )
-
-        raise HTTPException(
-            status_code=503,
-            detail="Database unavailable",
-        )
-
-    if done:
-        return {
-            "ok": True,
-            "duplicate": True,
-        }
-
     from bot import create_application
 
     telegram_app = create_application()
 
     telegram_app.bot_data["_worker_error"] = False
     telegram_app.bot_data["_session_failed"] = False
-
-    telegram_app.add_error_handler(
-        capture_bot_error
-    )
 
     update = Update.de_json(
         payload,
@@ -491,12 +405,26 @@ async def qstash_worker(request: Request):
             detail="Invalid Telegram update",
         )
 
+    user_id = update.effective_user.id if update.effective_user else None
+    try:
+        claimed = await asyncio.to_thread(claim_update, update_id, user_id)
+    except Exception:
+        LOG.exception("Update claim failed")
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    if claimed == "processing":
+        raise HTTPException(status_code=503, detail="Update already in progress")
+    if claimed != "claimed":
+        return {"ok": True, "duplicate": True, "status": claimed}
+    telegram_app.bot_data["_delivery_update_id"] = update_id
+    started = False
+
     try:
         async with telegram_app:
 
             await telegram_app.start()
 
             try:
+                started = True
                 await telegram_app.process_update(
                     update
                 )
@@ -523,21 +451,20 @@ async def qstash_worker(request: Request):
         )
 
         await asyncio.to_thread(
-            mark_processed,
+            finish_update,
             update_id,
             user_id,
         )
 
     except Exception:
-        LOG.exception(
-            "Worker failed for update %s",
-            update_id,
-        )
-
-        raise HTTPException(
-            status_code=503,
-            detail="Update processing failed",
-        )
+        LOG.exception("Worker failed for update %s", update_id)
+        if not started:
+            await asyncio.to_thread(release_update, update_id)
+            raise HTTPException(status_code=503, detail="Worker unavailable before processing")
+        # Telegram side effects cannot be rolled back with PostgreSQL. Do not
+        # rerun the handler after an ambiguous failure and create duplicate messages.
+        await asyncio.to_thread(finish_update, update_id, user_id, "uncertain")
+        return {"ok": True, "status": "uncertain"}
 
     return {
         "ok": True,

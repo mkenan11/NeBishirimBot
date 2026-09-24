@@ -30,17 +30,21 @@ TEMPORARY_KEYS = (
     "recipe_message_id",
     "help_message_id",
     "favorites_message_id",
+    "shopping_message_id",
+    "shopping_clear_token",
+    "delete_account_state",
 )
 
 
-def clear_pending_operations(context):
+def clear_pending_operations(context, keep=()):
     """Yarımçıq əməliyyatları ləğv edir, bazaya toxunmur."""
 
     if context.user_data is None:
         return
 
     for key in TEMPORARY_KEYS:
-        context.user_data.pop(key, None)
+        if key not in keep:
+            context.user_data.pop(key, None)
 
 
 async def stop_command(update, context):
@@ -131,7 +135,9 @@ async def pause_guard(update, context):
         context.user_data.pop(PAUSED_KEY, None)
         return
 
-    if is_stop:
+    if is_stop or re.match(r"^/delete_my_data(?:@\w+)?(?:\s|$)", text, re.I):
+        return
+    if update.callback_query and update.callback_query.data.startswith("account:"):
         return
 
     if update.callback_query:

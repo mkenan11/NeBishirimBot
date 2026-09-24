@@ -29,6 +29,12 @@ from ai_features import (
 from recipes import recipe_start, recipe_click
 from session_bridge import install_session_handlers
 from favorites_ui import show_favorites, favorite_click
+from command_controls import clear_pending_operations
+from ingredient_names import ingredient_key, normalize_name, split_ingredients
+from pantry_store import add_ingredients
+from shopping_ui import show_shopping, shopping_click
+from account_data import request_deletion, account_click
+from error_handlers import report_error
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "ingredients.db"
@@ -36,13 +42,14 @@ DB_PATH = BASE_DIR / "ingredients.db"
 MENU = ReplyKeyboardMarkup(
     [
         ["🧺 Ərzaqlarım", "🍽️ Nə bişirim?"],
-        ["⭐ Seçilmiş reseptlər", "ℹ️ Kömək"],
+        ["⭐ Seçilmiş reseptlər", "🛒 Alış-veriş siyahısı"],
+        ["ℹ️ Kömək"],
     ],
     resize_keyboard=True,
     is_persistent=True,
 )
-KNOWN = {name.casefold() for name in STAPLES} | {
-    name.casefold()
+KNOWN = {ingredient_key(name) for name in STAPLES} | {
+    ingredient_key(name)
     for name in (
         "Toyuq", "Toyuq filesi", "Mal əti", "Qoyun əti",
         "Ət", "Balıq", "Qiymə", "Kolbasa", "Sosiska",
@@ -129,33 +136,6 @@ def get_ingredients(user_id):
     return [row[0] for row in rows]
 
 
-def add_ingredients(user_id, names):
-    added = []
-    existing = []
-
-    with sqlite3.connect(DB_PATH) as db:
-        db.execute(
-            "INSERT OR IGNORE INTO users (user_id) VALUES (?)",
-            (user_id,),
-        )
-
-        for name in names:
-            result = db.execute(
-                """
-                INSERT OR IGNORE INTO ingredients
-                (user_id, name, normalized_name)
-                VALUES (?, ?, ?)
-                """,
-                (user_id, name, name.casefold()),
-            )
-
-            if result.rowcount == 1:
-                added.append(name)
-            else:
-                existing.append(name)
-
-    return added, existing
-
 
 def invalidate_edit_state(context):
     for key in ("undo", "delete_state", "clear_state"):
@@ -171,11 +151,7 @@ def parse_ingredients(text):
     if len(text) > 1500:
         return None
 
-    parts = re.split(
-        r"[,;\n]|\s+və\s+",
-        text,
-        flags=re.IGNORECASE,
-    )
+    parts = split_ingredients(text)
 
     if len(parts) > 30:
         return None
@@ -230,12 +206,11 @@ def parse_ingredients(text):
             continue
 
         raw_name = name[0].upper() + name[1:].lower()
-        name = TYPO_FIXES.get(
-            raw_name.casefold(),
-            raw_name,
-        )
-
-        normalized = name.casefold()
+        name = normalize_name(raw_name)
+        if name is None:
+            invalid.append(original)
+            continue
+        normalized = ingredient_key(name)
 
         if normalized in seen:
             continue
@@ -257,10 +232,7 @@ async def start(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-    context.user_data.pop("rename_target", None)
-    context.user_data.pop("pending_names", None)
-    context.user_data.pop("pending_message_id", None)
-    clear_photo_state(context)
+    clear_pending_operations(context)
 
     user_id = update.effective_user.id
     first_visit = register_user(user_id)
@@ -441,8 +413,7 @@ async def handle_text(
         await handle_rename_text(update, context)
         return
 
-    context.user_data.pop("pending_names", None)
-    context.user_data.pop("pending_message_id", None)
+    clear_pending_operations(context)
 
     parsed = parse_ingredients(text)
 
@@ -549,7 +520,11 @@ def help_view(section="main"):
             "istəsən YouTube-da video axtar.\n"
             "6. Bəyəndiyin resepti «⭐ Seçilmişlərə əlavə et» "
             "düyməsi ilə saxla. «⭐ Seçilmiş reseptlər» bölməsində "
-            "yenidən aça və ya silə bilərsən.\n\n"
+            "yenidən aça və ya silə bilərsən.\n"
+            "7. Resept siyahısında 1, 2 və ya 4 nəfər seç; 30/60 dəqiqə filtrini tətbiq et. "
+            "Filtr hazırkı təkliflərə əsaslanır.\n"
+            "8. Reseptin alınacaq ərzaqlarını alış-veriş siyahısına əlavə et. "
+            "Alınanları işarələmək onları avtomatik səbətə əlavə etmir.\n\n"
             "Qeyd: Fotodan tanınan ərzaqlar sən təsdiqləyənədək "
             "səbətə əlavə olunmur."
         )
@@ -574,7 +549,7 @@ def help_view(section="main"):
         text = (
             "🔐 Məxfilik və məlumatlarım\n\n"
             "Botun işləməsi üçün Telegram istifadəçi ID-n, "
-            "təsdiqlədiyin ərzaqlar, seçilmiş reseptlər və söhbətin işləmə vəziyyəti "
+            "təsdiqlədiyin ərzaqlar, seçilmiş reseptlər, alış-veriş siyahısı və söhbətin işləmə vəziyyəti "
             "Neon PostgreSQL bazasında saxlanılır. "
             "Təkrar sorğuları tanımaq üçün işlənmiş yeniləmə "
             "ID-ləri də qeyd olunur.\n\n"
@@ -586,7 +561,9 @@ def help_view(section="main"):
             "«🗑️ Hamısını sil» yalnız səbətdəki ərzaqları silir. "
             "İstifadəçi ID-si, sessiya və digər texniki qeydlər "
             "bu düymə ilə silinmir. Tam hesab məlumatlarını "
-            "silmək üçün ayrıca funksiya hələ yoxdur.\n\n"
+            "silmək üçün /delete_my_data yaz və ya aşağıdakı düyməni seç. "
+            "Bu, səbəti, seçilmişləri, alış-veriş siyahısını və sessiyanı silir. "
+            "Təkrar çatdırılmanı bloklamaq üçün istifadəçi ID-si olmayan yeniləmə qeydləri qalır.\n\n"
             "Botun daxilində səbəti silmək Telegram söhbət "
             "tarixçəsini silmir. Foto və mesajlarda şəxsi "
             "və həssas məlumat paylaşmamağın tövsiyə olunur."
@@ -617,6 +594,11 @@ def help_view(section="main"):
             "⬅️ Kömək menyusu", callback_data="help:main"
         )]
     ])
+    if section == "privacy":
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🗑️ Bütün məlumatlarımı sil", callback_data="help:delete")],
+            [InlineKeyboardButton("⬅️ Kömək menyusu", callback_data="help:main")],
+        ])
     return text, keyboard
 
 
@@ -624,10 +606,7 @@ async def show_help(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-    context.user_data.pop("rename_target", None)
-    context.user_data.pop("pending_names", None)
-    context.user_data.pop("pending_message_id", None)
-    clear_photo_state(context)
+    clear_pending_operations(context)
 
     text, keyboard = help_view()
 
@@ -658,6 +637,9 @@ async def help_click(update, context):
     await query.answer()
 
     section = query.data.split(":", 1)[1]
+    if section == "delete":
+        await request_deletion(update, context)
+        return
 
     text, keyboard = help_view(section)
 
@@ -692,6 +674,12 @@ def create_application():
     )
 
     install_session_handlers(app)
+    app.add_error_handler(report_error)
+    app.add_handler(CommandHandler("shopping", show_shopping))
+    app.add_handler(CommandHandler("delete_my_data", request_deletion))
+    app.add_handler(CallbackQueryHandler(shopping_click, pattern=r"^shop:"))
+    app.add_handler(CallbackQueryHandler(account_click, pattern=r"^account:"))
+    app.add_handler(MessageHandler(filters.Regex(r"^🛒 Alış-veriş siyahısı$"), show_shopping))
 
     app.add_handler(
         CommandHandler("start", start)

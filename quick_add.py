@@ -4,6 +4,9 @@ from pathlib import Path
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from basket_ui import basket_view, get_rows
+from ingredient_names import ingredient_key
+from pantry_store import add_ingredients
+from command_controls import clear_pending_operations
 
 
 DB_PATH = Path(__file__).resolve().parent / "ingredients.db"
@@ -41,13 +44,13 @@ def quick_view(user_id, selected, page=0):
 
     # Artıq movcud olan erzaqlar
     existing = {
-        row[2] for row in rows
+        ingredient_key(row[1]) for row in rows
     }
 
     # Movcud mehsullari secimden cixar
     available = {
         name for name in STAPLES
-        if name.casefold() not in existing
+        if ingredient_key(name) not in existing
     }
 
     selected.intersection_update(available)
@@ -91,7 +94,7 @@ def quick_view(user_id, selected, page=0):
     ):
         name = STAPLES[index]
 
-        if name.casefold() in existing:
+        if ingredient_key(name) in existing:
             label = f"✅ {name} — siyahındadır"
 
         elif name in selected:
@@ -172,6 +175,7 @@ async def quick_add_click(update, context):
 
     # Tez elave et menyusunu ac
     if action == "open":
+        clear_pending_operations(context, keep=("basket_message_id",))
         selected = set()
 
         context.user_data["quick_selected"] = selected
@@ -265,11 +269,11 @@ async def quick_add_click(update, context):
             name = STAPLES[index]
 
             existing = {
-                row[2]
+                ingredient_key(row[1])
                 for row in get_rows(user_id)
             }
 
-            if name.casefold() in existing:
+            if ingredient_key(name) in existing:
                 await query.answer(
                     "Bu ərzaq artıq siyahındadır."
                 )
@@ -301,33 +305,7 @@ async def quick_add_click(update, context):
                 )
                 return
 
-            added = []
-
-            with sqlite3.connect(DB_PATH) as db:
-                db.execute(
-                    """
-                    INSERT OR IGNORE INTO users (user_id)
-                    VALUES (?)
-                    """,
-                    (user_id,),
-                )
-
-                for name in names:
-                    result = db.execute(
-                        """
-                        INSERT OR IGNORE INTO ingredients
-                        (user_id, name, normalized_name)
-                        VALUES (?, ?, ?)
-                        """,
-                        (
-                            user_id,
-                            name,
-                            name.casefold(),
-                        ),
-                    )
-
-                    if result.rowcount == 1:
-                        added.append(name)
+            added, _ = add_ingredients(user_id, names)
 
             context.user_data.pop(
                 "quick_selected",

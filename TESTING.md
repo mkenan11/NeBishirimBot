@@ -1,36 +1,36 @@
 # Testlərin işlədilməsi
 
-GitHub-da **Actions → Bot tests** bölməsi hər push və pull request üçün
-asılılıqları, Python sintaksisini, tətbiqin qurulmasını və `tests/` daxilindəki
-avtomatik sınaqları yoxlayır. **Run workflow** ilə əl ilə də başladılır.
-
-Testlər Python 3.13 ilə işləyir. Telegram, Gemini və Neon üçün real açarlar
-və GitHub Secrets lazım deyil. Tətbiqin qurulması addımında yalnız sınaq
-dəyərləri istifadə olunur; bot başladılmır. Xarici xidmət əməliyyatları
-testlərdə əvəzlənir və istifadəçi məlumatları dəyişdirilmir.
-
-Windows-da layihə qovluğundan:
+GitHub-da **Actions → Bot tests** hər push və pull request üçün asılılıqları,
+Python sintaksisini, tətbiqin qurulmasını və avtomatik sınaqları yoxlayır.
+**Run workflow** ilə əl ilə də başladılır. Python 3.13 istifadə olunur.
 
 ```powershell
 .\.venv\Scripts\python.exe -B -m unittest discover -s tests -v
 .\.venv\Scripts\python.exe -m pip check
 ```
 
-Digər mühitlərdə, asılılıqlar quraşdırıldıqdan sonra:
+Digər mühitlərdə `.\.venv\Scripts\python.exe` əvəzinə `python` istifadə et.
+41 şəbəkəsiz test seçilmişləri, menyu keçidlərini, resept yoxlamalarını,
+porsiya və vaxt seçimlərini, ərzaq adlarını, alış-veriş düymələrini,
+silinmə təsdiqini və worker-in təkrar sorğulara davranışını yoxlayır.
+Telegram və Gemini çağırışları əvəzlənir; real API açarları lazım deyil.
 
-```sh
-python -B -m unittest discover -s tests -v
-python -m pip check
+Əlavə 9 PostgreSQL sınağı üçün ayrıca test bazası göstər:
+
+```powershell
+$env:TEST_DATABASE_URL = 'postgresql://postgres:postgres@localhost:5432/ne_bishirim_test'
+.\.venv\Scripts\python.exe -B -m unittest discover -s tests -p test_database_integration.py -v
 ```
 
-Hazırkı 15 test seçilmiş reseptlərin saxlanması, köhnə düymələrin bloklanması,
-sessiyanın bərpası, saxlama xətası, menyu keçidləri, sahiblik parametrləri,
-cari səbətə uyğun çatışmayan ərzaqlar və uzun mesajları əhatə edir.
-Tam canlı Telegram/QStash axını və AI cavabının keyfiyyəti ayrıca yoxlanmalıdır.
+Bu dəyişən yoxdursa DB testləri buraxılır. Hər DB testi ayrıca sxem yaradır
+və sonda bütün tranzaksiyanı geri qaytarır. CI müvəqqəti PostgreSQL 16
+servisi işlədir; Neon açarı və GitHub Secrets tələb olunmur.
+Sınaqlar miqrasiyanı, köhnə məlumatlarla uyğunluğu, istifadəçi sərhədlərini,
+atomik sessiya yazılmasını və silinməni yoxlayır.
 
+Tam canlı Telegram/QStash axını və AI resept keyfiyyəti ayrıca qiymətləndirilir.
 Kök qovluqdakı `gemini_*test.py`, `gemini_compare.py` və
-`nvidia_recipe_test.py` canlı API sınaqlarıdır; avtomatik testlərə daxil deyil.
+`nvidia_recipe_test.py` canlı API sınaqlarıdır; bu workflow-a daxil deyil.
 
-Bu workflow test nəticəsini göstərir. Vercel-in avtomatik yayımlamasını
-dayandırmır və branch protection qaydası yaratmır. Gələcək dəyişikliklərdə
-pull request açıb yaşıl **Python tests** nəticəsini yoxlamaq məsləhətdir.
+Workflow Vercel-in avtomatik yayımını dayandırmır və branch protection
+yaratmır. Yayım zamanı Actions nəticəsi və Vercel statusu ayrıca yoxlanmalıdır.

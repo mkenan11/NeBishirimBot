@@ -32,7 +32,7 @@ def _normalize(value):
     )
 
 
-def recipe_fingerprint(recipe):
+def recipe_fingerprint(recipe, legacy=False):
     """
     Eyni reseptin tekrar saxlanmasinin qarsisini alir.
 
@@ -63,6 +63,12 @@ def recipe_fingerprint(recipe):
         "method": method,
         "ingredients": ingredient_names,
     }
+
+    if not legacy:
+        if recipe.get("species"):
+            identity["species"] = _normalize(recipe["species"])
+        if recipe.get("servings", 2) != 2:
+            identity["servings"] = recipe["servings"]
 
     content = json.dumps(
         identity,
@@ -114,6 +120,18 @@ def _recipe_payload(recipe):
     return payload
 
 
+def _find_favorite(db, user_id, recipe):
+    return db.execute(
+        """SELECT id FROM favorite_recipes
+           WHERE user_id = %s AND fingerprint IN (%s, %s)
+             AND COALESCE(recipe->>'species', '') = %s
+             AND COALESCE((recipe->>'servings')::integer, 2) = %s
+           ORDER BY id LIMIT 1""",
+        (int(user_id), recipe_fingerprint(recipe), recipe_fingerprint(recipe, legacy=True),
+         recipe.get("species") or "", recipe.get("servings", 2)),
+    ).fetchone()
+
+
 def save_favorite(user_id, recipe):
     """
     Tam resepti Neon-da saxlayir.
@@ -133,6 +151,10 @@ def save_favorite(user_id, recipe):
         connect_timeout=10,
         prepare_threshold=None,
     ) as db:
+
+        existing = _find_favorite(db, user_id, recipe)
+        if existing is not None:
+            return int(existing[0]), False
 
         row = db.execute(
             """
@@ -177,15 +199,10 @@ def save_favorite(user_id, recipe):
 
 def is_favorite(user_id, recipe):
     """Reseptin cari istifadəçinin seçilmişlərində olub-olmadığını yoxlayır."""
-    fingerprint = recipe_fingerprint(recipe)
     with psycopg.connect(
         _database_url(), connect_timeout=10, prepare_threshold=None,
     ) as db:
-        row = db.execute(
-            "SELECT 1 FROM favorite_recipes WHERE user_id = %s AND fingerprint = %s",
-            (int(user_id), fingerprint),
-        ).fetchone()
-    return row is not None
+        return _find_favorite(db, user_id, recipe) is not None
 
 
 def list_favorites(user_id, limit=50, offset=0):
@@ -211,7 +228,9 @@ def list_favorites(user_id, limit=50, offset=0):
                 recipe->>'name' AS name,
                 recipe->>'method' AS method,
                 (recipe->>'total')::integer AS total,
-                created_at
+                created_at,
+                COALESCE((recipe->>'servings')::integer, 2),
+                recipe->>'species'
             FROM favorite_recipes
             WHERE user_id = %s
             ORDER BY created_at DESC, id DESC
@@ -231,6 +250,8 @@ def list_favorites(user_id, limit=50, offset=0):
             "method": row[2],
             "total": row[3],
             "created_at": row[4],
+            "servings": row[5],
+            "species": row[6],
         }
         for row in rows
     ]

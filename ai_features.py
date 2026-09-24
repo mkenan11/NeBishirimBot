@@ -12,6 +12,9 @@ from pydantic import BaseModel
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from basket_ui import basket_view, get_rows
+from command_controls import clear_pending_operations
+from ingredient_names import normalize_name, ingredient_key, split_ingredients
+from pantry_store import add_ingredients
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -63,22 +66,6 @@ def button(label, action):
     )
 
 
-def normalize_name(value):
-    if not isinstance(value, str):
-        return None
-
-    name = " ".join(value.split()).strip()
-
-    if (
-        not name
-        or len(name) > 50
-        or not NAME_PATTERN.fullmatch(name)
-    ):
-        return None
-
-    return name[0].upper() + name[1:].lower()
-
-
 def unique_names(values, limit=20):
     result = []
     seen = set()
@@ -89,7 +76,7 @@ def unique_names(values, limit=20):
         if name is None:
             continue
 
-        normalized = name.casefold()
+        normalized = ingredient_key(name)
 
         if normalized in seen:
             continue
@@ -325,13 +312,7 @@ def photo_view(state):
 
 
 async def handle_photo(update, context):
-    # Evvelki yarimciq sekil secimini bagla.
-    context.user_data.pop("photo_state", None)
-    context.user_data.pop("photo_message_id", None)
-
-    # Evvelki metn tesdiqini bagla.
-    context.user_data.pop("pending_names", None)
-    context.user_data.pop("pending_message_id", None)
+    clear_pending_operations(context)
 
     photo = update.message.photo[-1]
 
@@ -621,6 +602,7 @@ async def photo_click(update, context):
         context.user_data.pop("photo_state", None)
         context.user_data.pop("photo_message_id", None)
 
+        clear_pending_operations(context)
         context.user_data["basket_message_id"] = (
             query.message.message_id
         )
@@ -736,36 +718,7 @@ async def photo_click(update, context):
         )
         return
 
-    added = []
-    existing = []
-
-    with sqlite3.connect(DB_PATH) as db:
-        db.execute(
-            """
-            INSERT OR IGNORE INTO users (user_id)
-            VALUES (?)
-            """,
-            (user_id,),
-        )
-
-        for name in selected_names:
-            result = db.execute(
-                """
-                INSERT OR IGNORE INTO ingredients
-                (user_id, name, normalized_name)
-                VALUES (?, ?, ?)
-                """,
-                (
-                    user_id,
-                    name,
-                    name.casefold(),
-                ),
-            )
-
-            if result.rowcount == 1:
-                added.append(name)
-            else:
-                existing.append(name)
+    added, existing = add_ingredients(user_id, selected_names)
 
     if added:
         for key in (

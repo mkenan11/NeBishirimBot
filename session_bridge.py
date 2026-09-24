@@ -16,6 +16,7 @@ LOG = logging.getLogger(__name__)
 async def load_state(update, context):
     """Telegram əməliyyatından əvvəl sessiyanı oxu."""
 
+    context.application.bot_data["_worker_error"] = False
     user = update.effective_user
 
     if user is None or context.user_data is None:
@@ -57,12 +58,20 @@ async def save_state(update, context):
     if user is None or context.user_data is None:
         return
 
+    if context.application.bot_data.get("_account_deleted_update") == update.update_id:
+        return
+    # A handler failure must not persist a half-mutated menu as a success.
+    if context.application.bot_data.get("_worker_error"):
+        return
     try:
-        await asyncio.to_thread(
+        saved = await asyncio.to_thread(
             save_session,
             user.id,
             dict(context.user_data),
+            context.application.bot_data.get("_delivery_update_id"),
         )
+        context.user_data.clear()
+        context.user_data.update(saved)
 
     except Exception:
         LOG.exception("Sessiya saxlanmadı.")
@@ -71,8 +80,8 @@ async def save_state(update, context):
 
         if update.effective_message:
             await update.effective_message.reply_text(
-                "Sessiya yadda saxlanmadı. "
-                "Bir az sonra yenidən cəhd et."
+                "Ekranın vəziyyəti yadda saxlanmadı. Ərzaq və resept dəyişiklikləri saxlanmış ola bilər. "
+                "Menyunu yenidən açıb yoxla."
             )
 
 

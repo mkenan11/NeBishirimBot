@@ -1,5 +1,6 @@
 """NeBishirim - Telegram sessiyalarinin Neon-da saxlanmasi."""
 
+import copy
 import json
 import os
 
@@ -183,7 +184,7 @@ def load_session(user_id):
     return state
 
 
-def save_session(user_id, state):
+def save_session(user_id, state, update_id=None):
     """
     Istifadecinin sessiyasini Neon-da saxlayir.
     """
@@ -193,17 +194,25 @@ def save_session(user_id, state):
             "Sessiya dict olmalidir."
         )
 
-    payload = json.dumps(
-        _pack(state),
-        ensure_ascii=False,
-        separators=(",", ":"),
-        allow_nan=False,
-    )
-
+    state = copy.deepcopy(state)
+    def encode():
+        return json.dumps(_pack(state), ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    payload = encode()
     if len(payload.encode("utf-8")) > MAX_SESSION_BYTES:
-        raise ValueError(
-            "Sessiya 512 KB limitini kecdi."
-        )
+        recipe_state = state.get("recipe_state", {})
+        active = recipe_state.get("active_detail", {})
+        for mode, view in recipe_state.get("views", {}).items():
+            details = view.get("details", {})
+            active_key = active.get("cache_key", (active.get("page"), active.get("index")))
+            view["details"] = ({active_key: details[active_key]}
+                if active.get("mode") == mode and active_key in details else {})
+        payload = encode()
+    if len(payload.encode("utf-8")) > MAX_SESSION_BYTES:
+        state.pop("recipe_state", None)
+        state.pop("recipe_message_id", None)
+        payload = encode()
+    if len(payload.encode("utf-8")) > MAX_SESSION_BYTES:
+        raise ValueError("Sessiya 512 KB limitini kecdi.")
 
     with psycopg.connect(
         _url(),
@@ -228,6 +237,11 @@ def save_session(user_id, state):
                 payload,
             ),
         )
+
+        if update_id is not None:
+            db.execute("""UPDATE processed_updates SET delivery_status = 'completed'
+                WHERE update_id = %s AND delivery_status = 'processing'""", (update_id,))
+    return state
 
 
 def delete_session(user_id):
