@@ -33,17 +33,18 @@ MODE_NAMES = {
     MODE_SHOP: "Əlavə 1–2 ərzaqla",
 }
 
-TIME_LABELS = {0: "Hamısı", 30: "≤30 dəq", 90: "31–90 dəq"}
+TIME_LABELS = {0: "Hamısı", 45: "≤45 dəq", 90: "46–90 dəq"}
 
 
 def time_range(value):
-    # Sessions saved before the non-overlapping ranges used 60 as an upper bound.
-    return 90 if value == 60 else value if value in TIME_LABELS else 0
+    # Keep older session values and buttons usable after the boundary change.
+    value = {30: 45, 60: 90}.get(value, value)
+    return value if value in TIME_LABELS else 0
 
 
 def matches_time(minutes, value):
     value = time_range(value)
-    return value == 0 or (minutes <= 30 if value == 30 else 30 < minutes <= 90)
+    return value == 0 or (minutes <= 45 if value == 45 else 45 < minutes <= 90)
 
 
 def method_key(value):
@@ -486,9 +487,9 @@ async def candidates(
         + "\n"
 
         + f"PORSİYA: {servings} nəfər.\n"
-        + ("VAXT: hazırlıq, bişirmə və məcburi gözləmə daxil 30 dəqiqədən çox olmasın.\n"
-           if time_range(time_limit) == 30 else
-           "VAXT: hazırlıq, bişirmə və məcburi gözləmə daxil 31–90 dəqiqə olsun.\n"
+        + ("VAXT: hazırlıq, bişirmə və məcburi gözləmə daxil 45 dəqiqədən çox olmasın.\n"
+           if time_range(time_limit) == 45 else
+           "VAXT: hazırlıq, bişirmə və məcburi gözləmə daxil 46–90 dəqiqə olsun.\n"
            if time_range(time_limit) == 90 else "VAXT: məhdudiyyət yoxdur; qısa və uzun yeməkləri qarışıq seç.\n")
         + "ƏVVƏLKİ ÜSUL VƏ ƏRZAQ BİRLƏŞMƏLƏRİ: "
         + "; ".join(method + ": " + ", ".join(sorted(items))
@@ -1631,7 +1632,9 @@ async def recipe_start(update, context):
     context.user_data["recipe_message_id"] = (
         status.message_id
     )
-    preferences = context.user_data.get("recipe_preferences", {})
+    # Choices apply within a search; every new search starts from these defaults.
+    preferences = {"time_limit": 0, "servings": 2}
+    context.user_data["recipe_preferences"] = preferences
 
     try:
         (
@@ -1831,7 +1834,7 @@ async def recipe_click(update, context):
     state.pop("active_detail", None)
 
     if action in ("time", "servings"):
-        allowed = (0, 30, 60, 90) if action == "time" else (1, 2, 4)
+        allowed = (0, 30, 45, 60, 90) if action == "time" else (1, 2, 4)
         if len(parts) != 3 or not parts[2].isdigit() or int(parts[2]) not in allowed:
             return
         setting = "time_limit" if action == "time" else "servings"

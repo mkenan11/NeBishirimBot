@@ -41,8 +41,10 @@ Telegram söhbət tarixçəsi və xarici xidmət qeydləri bu əməliyyatla sili
 
 Alış-veriş bölməsi menyudan gizlədilib; əvvəlki siyahılar saxlanır və hesab
 silinməsinə daxildir. Köhnə düymələr siyahını dəyişmir. Çatışmayan ərzaqlar
-reseptdə görünür. Vaxt seçimləri Hamısı, ≤30 dəq, 31–90 dəq-dir; Hamısı
-90 dəqiqədən uzun yeməkləri də əhatə edir. Köhnə 60 dəqiqə seçimi 31–90-a keçir.
+reseptdə görünür. Vaxt seçimləri Hamısı, ≤45 dəq, 46–90 dəq-dir; Hamısı
+90 dəqiqədən uzun yeməkləri də əhatə edir. Köhnə 30 və 60 dəqiqə seçimləri
+uyğun olaraq ≤45 və 46–90-a keçir. Hər yeni resept axtarışı Hamısı və 2 nəfər
+ilə başlayır; həmin axtarış daxilində dəyişdirilən seçimlər saxlanır.
 Filtrə basmaq mövcud siyahını süzür, AI çağırmır. Boş nəticədə ayrıca axtarış
 düyməsi var. Yeni axtarışlara vaxt və porsiya ötürülür; başqa aralıqdakı
 namizədlər itirilmir. Tam reseptin dəqiqləşən vaxtı yenidən yoxlanır.

@@ -1,6 +1,7 @@
 """Recipe discovery regressions; no network or database calls."""
 
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import recipes
@@ -8,18 +9,19 @@ import favorites_ui
 import test_favorites_flow as fixtures
 
 
-def item(minutes=45, name="Sobada tərəvəz", method="Sobada bişirmə", ingredients=None):
+def item(minutes=50, name="Sobada tərəvəz", method="Sobada bişirmə", ingredients=None):
     return dict(name=name, minutes=minutes, method=method,
                 ingredients=ingredients or ["Kartof", "Soğan"], missing=[])
 
 
 class DiscoveryTests(unittest.TestCase):
     def test_non_overlapping_boundaries_and_unlimited(self):
-        values = (5, 30, 31, 60, 90, 91, 180)
-        self.assertEqual([n for n in values if recipes.matches_time(n, 30)], [5, 30])
-        self.assertEqual([n for n in values if recipes.matches_time(n, 90)], [31, 60, 90])
+        values = (5, 30, 31, 45, 46, 60, 90, 91, 180)
+        self.assertEqual([n for n in values if recipes.matches_time(n, 45)], [5, 30, 31, 45])
+        self.assertEqual([n for n in values if recipes.matches_time(n, 90)], [46, 60, 90])
         self.assertTrue(all(recipes.matches_time(n, 0) for n in values))
         self.assertEqual(recipes.time_range(60), 90)
+        self.assertEqual(recipes.time_range(30), 45)
 
     def test_missing_salt_and_oil_are_counted(self):
         batch = recipes.ShortBatch(recipes=[recipes.ShortRecipe(
@@ -52,6 +54,26 @@ class DiscoveryTests(unittest.TestCase):
 class DiscoveryInteractionTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         fixtures.FavoritesFlowTests.setUp(self)
+
+    async def test_new_search_resets_defaults_but_mode_changes_keep_current_choices(self):
+        self.context.user_data["recipe_preferences"] = {"time_limit": 90, "servings": 4}
+        status = SimpleNamespace(message_id=42, edit_text=AsyncMock())
+        update = SimpleNamespace(callback_query=None, effective_user=SimpleNamespace(id=123),
+                                 message=SimpleNamespace(reply_text=AsyncMock(return_value=status)))
+        with patch.object(recipes, "fill", new_callable=AsyncMock,
+                          return_value=([item()], [], set(), set())) as fill:
+            await recipes.recipe_start(update, self.context)
+            self.assertEqual(fill.call_args.args[-2:], (0, 2))
+            self.assertEqual(self.context.user_data["recipe_preferences"], {"time_limit": 0, "servings": 2})
+            self.query.data = "recipe:time:45"
+            await recipes.recipe_click(self.update, self.context)
+            self.query.data = "recipe:servings:4"
+            await recipes.recipe_click(self.update, self.context)
+            self.query.data = "recipe:mode:owned"
+            await recipes.recipe_click(self.update, self.context)
+            self.assertEqual(fill.call_args.args[-2:], (45, 4))
+            await recipes.recipe_start(update, self.context)
+            self.assertEqual(fill.call_args.args[-2:], (0, 2))
 
     async def test_time_filter_never_generates_and_legacy_60_maps_to_range(self):
         self.query.data = "recipe:time:60"
@@ -113,5 +135,5 @@ class DiscoveryInteractionTests(unittest.IsolatedAsyncioTestCase):
             await recipes.candidates(["Kartof", "Soğan"], {"old"},
                                      {recipes.signature(item())}, 1, 0, "all", 90, 4)
         prompt = ai.call_args.args[0]
-        for expected in ("31–90", "4 nəfər", "ƏVVƏLKİ ÜSUL", "daha az namizəd", "duzunu"):
+        for expected in ("46–90", "4 nəfər", "ƏVVƏLKİ ÜSUL", "daha az namizəd", "duzunu"):
             self.assertIn(expected, prompt)

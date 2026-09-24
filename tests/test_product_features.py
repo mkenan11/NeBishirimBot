@@ -71,9 +71,9 @@ class RecipeValidationTests(unittest.TestCase):
                             favorites_store.recipe_fingerprint(dict(full, servings=4)))
 
     def test_time_filter_preserves_original_callback_indices(self):
-        items = [dict(self.short, minutes=value) for value in (60, 20, 40)]
+        items = [dict(self.short, minutes=value) for value in (60, 20, 50)]
         view = recipes.new_view("all", items, [], set(), set())
-        view["time_limit"] = 30
+        view["time_limit"] = 45
         callbacks = [b.callback_data for row in recipes.summary_keyboard(view).inline_keyboard for b in row]
         self.assertIn("recipe:open:1", callbacks)
         self.assertNotIn("recipe:open:0", callbacks)
@@ -82,7 +82,7 @@ class RecipeValidationTests(unittest.TestCase):
 
     def test_empty_filter_explains_next_action(self):
         view = recipes.new_view("all", [dict(self.short, minutes=90)], [], set(), set())
-        view["time_limit"] = 30
+        view["time_limit"] = 45
         self.assertIn("vaxt aralığına uyğun təklif yoxdur", recipes.summary_text(view))
 
     def test_help_and_menu_expose_new_features(self):

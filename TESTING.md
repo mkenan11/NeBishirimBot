@@ -10,7 +10,7 @@ Python sintaksisini, tətbiqin qurulmasını və avtomatik sınaqları yoxlayır
 ```
 
 Digər mühitlərdə `.\.venv\Scripts\python.exe` əvəzinə `python` istifadə et.
-52 şəbəkəsiz test seçilmişləri, menyu keçidlərini, resept yoxlamalarını,
+53 şəbəkəsiz test seçilmişləri, menyu keçidlərini, resept yoxlamalarını,
 porsiya və vaxt aralıqlarını, məqsədli axtarışı, təkrar təklifləri, ərzaq adlarını,
 köhnə alış-veriş düymələrinin bloklanmasını,
 silinmə təsdiqini və worker-in təkrar sorğulara davranışını yoxlayır.
