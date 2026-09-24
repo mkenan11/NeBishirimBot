@@ -75,15 +75,15 @@ class RecipeValidationTests(unittest.TestCase):
         view = recipes.new_view("all", items, [], set(), set())
         view["time_limit"] = 45
         callbacks = [b.callback_data for row in recipes.summary_keyboard(view).inline_keyboard for b in row]
-        self.assertIn("recipe:open:1", callbacks)
+        self.assertNotIn("recipe:open:1", callbacks)
         self.assertNotIn("recipe:open:0", callbacks)
-        self.assertIn("1 təklif", recipes.summary_text(view))
+        self.assertIn("5 reseptlik", recipes.summary_text(view))
         self.assertIn("recipe:servings:4", callbacks)
 
     def test_empty_filter_explains_next_action(self):
         view = recipes.new_view("all", [dict(self.short, minutes=90)], [], set(), set())
         view["time_limit"] = 45
-        self.assertIn("vaxt aralığına uyğun təklif yoxdur", recipes.summary_text(view))
+        self.assertIn("5 reseptlik", recipes.summary_text(view))
 
     def test_help_and_menu_expose_new_features(self):
         labels = [button.text for row in bot.MENU.keyboard for button in row]

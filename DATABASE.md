@@ -52,14 +52,15 @@ Ad və duz/istiot dəyişiklikləri eyni üsul və əsas ərzaqlarla yeni təkli
 Model təlimatları müxtəlif real yeməklər istəyir, keyfiyyətə zəmanət vermir.
 Səhifə bölgüsü: Bütün təkliflər = 3 evdəki + 1 tək əlavə + 1 iki əlavə;
 Yalnız evdəkilərlə = 5 evdəki; Əlavə 1–2 = 3 tək əlavə + 2 iki əlavə.
-Hər axtarış ən çox bir namizəd paketi istəyir; AI üçün ümumi hədd 20 saniyədir.
+Hər axtarış əvvəl bir namizəd paketi istəyir; çatışmayan qruplar ikinci mərhələdə
+paralel tamamlanır (ən çox 3 əlavə sorğu). AI üçün ümumi hədd yenə 20 saniyədir.
 Siyahı sorğusunda hər modelin HTTP həddi 10 saniyədir; ehtiyat model də ümumi
 20 saniyəyə daxildir. Foto və tam resept üçün əvvəlki vaxt parametrləri qalır.
-Uyğun keş nəticəsi varsa dərhal göstərilir. Qalan yerlər ayrıca düymə ilə,
-mövcud reseptlər və onların indeksləri qorunaraq tamamlanır. İlk sorğu xətasında
-yenidən cəhd düyməsi qalır. Növbə, baza və Telegram vaxtı AI həddinə daxil deyil.
-Uyğun nəticə çatmırsa başqa qrupdan doldurulmur; çatışmayan say ekranda göstərilir.
-Vaxt filtri cari səhifəni süzdüyü üçün görünən say azala bilər.
+Tam 5-lik keş nəticəsi varsa dərhal göstərilir. Natamam namizədlər təkrar cəhd
+üçün saxlanır, ayrıca səhifə kimi göstərilmir. Yeni 5-lik tapılmasa əvvəlki
+səhifə qalır. İlk axtarışda və ya filtrdən sonra 5-lik yoxdursa axtarış düyməsi
+göstərilir. Başqa qrupdan resept götürərək bölgü süni doldurulmur.
+Növbə, baza və Telegram vaxtı AI həddinə daxil deyil.
 Mətn və düymələr eyni sıralanmış görünüşü istifadə edir; callback indeksləri
 və tam resept keşi dəyişmir. Tam resept ilkin çatışmayan ərzaqları dəyişə bilməz.
 1/2/4 nəfər seçimi tam resept hazırlanmasına ötürülür; vaxt və temperatur

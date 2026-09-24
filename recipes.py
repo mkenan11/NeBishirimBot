@@ -23,7 +23,7 @@ LOG = logging.getLogger(__name__)
 
 PAGE_SIZE = 5
 MAX_PAGES = 10
-MAX_REFILL = 1
+MAX_REFILL = 2
 SEARCH_TIMEOUT_SECONDS = 20
 
 MODE_ALL, MODE_HOME, MODE_SHOP = "all", "owned", "extra"
@@ -573,74 +573,51 @@ async def fill(
     servings=2,
     slots=None,
 ):
+    pool = list({norm(item["name"]): item for item in pool}.values())
     deferred = [x for x in pool if not matches_time(x["minutes"], time_limit)]
     pool = [x for x in pool if matches_time(x["minutes"], time_limit)]
     history = set(history)
     signatures = set(signatures)
 
     deadline = asyncio.get_running_loop().time() + SEARCH_TIMEOUT_SECONDS
-    # Show useful cached candidates immediately. Explicit completion may fetch
-    # one batch for the remaining slots, never loop to force a full page.
-    cached, _ = pick(pool, mode, slots)
-    if cached and slots is None:
-        selected, remainder = pick(pool, mode)
-        return selected, remainder + deferred, history, signatures
     for attempt in range(MAX_REFILL):
         missing = {count: n for count, n in deficits(pool, mode, slots).items() if n}
         if not missing:
             break
-        target = MODE_ALL if 0 in missing and len(missing) > 1 else MODE_HOME if 0 in missing else MODE_SHOP
-        missing_target = next(iter(missing)) if target == MODE_SHOP and len(missing) == 1 else None
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
             break
-
-        try:
-            fresh = await asyncio.wait_for(candidates(
-                basket,
-                history,
-                signatures,
-                page,
-                attempt,
-                target,
-                time_limit,
-                servings,
-                missing_target=missing_target,
-                requested_counts=missing,
-            ), timeout=remaining)
-
-        except Exception:
-            if not pool:
-                raise
-
-            break
-
-        pool.extend(x for x in fresh if matches_time(x["minutes"], time_limit))
-        deferred.extend(x for x in fresh if not matches_time(x["minutes"], time_limit))
-
-        history.update(
-            norm(x["name"])
-            for x in fresh
-        )
-
-        signatures.update(
-            signature(x)
-            for x in fresh
-        )
-
-    selected, remainder = pick(
-        pool,
-        mode,
-        slots,
-    )
-    remainder.extend(deferred)
-
-    return (
-        selected,
-        remainder,
-        history,
-        signatures,
-    )
+        # First batch covers every required group. Top-ups run concurrently,
+        # sharing the original deadline rather than adding sequential waits.
+        requests = [missing] if attempt == 0 else [{count: n} for count, n in missing.items()]
+        async def fetch(requested):
+            target = MODE_ALL if 0 in requested and len(requested) > 1 else MODE_HOME if 0 in requested else MODE_SHOP
+            single = next(iter(requested)) if target == MODE_SHOP and len(requested) == 1 else None
+            return await candidates(basket, history.copy(), signatures.copy(), page, attempt,
+                                    target, time_limit, servings, missing_target=single,
+                                    requested_counts=requested)
+        results = await asyncio.gather(*(asyncio.wait_for(fetch(request), timeout=remaining)
+                                         for request in requests), return_exceptions=True)
+        errors = []
+        for result in results:
+            if isinstance(result, BaseException):
+                if isinstance(result, asyncio.CancelledError):
+                    raise result
+                errors.append(result)
+                continue
+            for recipe in result:
+                if norm(recipe["name"]) in history:
+                    continue
+                history.add(norm(recipe["name"]))
+                signatures.add(signature(recipe))
+                (pool if matches_time(recipe["minutes"], time_limit) else deferred).append(recipe)
+        if errors and not pool and not deferred:
+            raise errors[0]
+    selected, remainder = pick(pool, mode, slots)
+    if any(deficits(selected, mode, slots).values()):
+        # Partial candidates are retained for retry, never published as a page.
+        return [], pool + deferred, history, signatures
+    return selected, remainder + deferred, history, signatures
 
 
 # ============================================================
@@ -1218,8 +1195,11 @@ async def make_full(short, basket, species=None, servings=2):
 
 def visible_recipes(view):
     limit = time_range(view.get("time_limit", 0))
-    return [(i, recipe) for i, recipe in enumerate(view["pages"][view["page"]])
-            if matches_time(recipe["minutes"], limit)]
+    matching = [(i, recipe) for i, recipe in enumerate(view["pages"][view["page"]])
+                if matches_time(recipe["minutes"], limit)]
+    if len(matching) != PAGE_SIZE or any(deficits([r for _, r in matching], view["mode"]).values()):
+        return []
+    return matching
 
 
 def display_recipes(view):
@@ -1280,15 +1260,7 @@ def summary_text(view):
         lines.append("")
 
     if not visible_recipes(view):
-        lines.append("Bu səhifədə seçilmiş vaxt aralığına uyğun təklif yoxdur. Digər səhifələrə bax və ya bu vaxta uyğun reseptlər axtar."
-                     if time_range(view.get("time_limit", 0)) else
-                     "Bu seçimdə uyğun təklif tapılmadı. Başqa təkliflər axtar və ya ərzaq seçimini dəyiş.")
-    shortfalls = deficits([recipe for _, recipe in display_recipes(view)], view["mode"])
-    if any(shortfalls.values()):
-        labels = {0: "evdəkilərlə", 1: "1 əlavə ərzaqla", 2: "2 əlavə ərzaqla"}
-        lines.append("Bölgünü tamamlamaq üçün çatmır: " + "; ".join(
-            f"{n} resept {labels[count]}" for count, n in shortfalls.items() if n) +
-            ". Bu axtarışda tapılmadı; başqa təkliflər axtara və ya filtri dəyişə bilərsən.")
+        lines.append("Bu seçimlə 5 reseptlik bölgü hələ tamamlanmayıb. Yenidən axtar və ya seçimi dəyiş.")
     lines.append(
         "ℹ️ Vaxt hazırlıq, bişirmə və gözləmə daxil təxminidir. Səbətdə miqdar yoxdur. "
         "Reseptdə yazılan miqdarları evdə yoxla."
@@ -1372,7 +1344,7 @@ def summary_keyboard(view):
         rows.append(navigation)
 
     if any(deficits(view["pages"][view["page"]], view["mode"]).values()):
-        label = "🔄 Qalan təklifləri tamamla" if view["pages"][view["page"]] else "🔄 Yenidən cəhd et"
+        label = "🔄 5 resept tap"
         rows.append([btn(label, "recipe:complete")])
 
     if not visible_recipes(view) and time_range(view.get("time_limit", 0)) and len(view["pages"]) < MAX_PAGES:
@@ -2299,12 +2271,10 @@ async def recipe_click(update, context):
     if not recipes:
         view["empty_runs"] += 1
 
-        view["exhausted"] = (
-            view["empty_runs"] >= 2
-        )
+        view["exhausted"] = False
 
         await q.edit_message_text(
-            "Bu şərtlərlə yeni və fərqli resept tapılmadı. Vaxt və ya ərzaq seçimini dəyişə bilərsən.\n\n"
+            "Bu cəhddə şərtlərə uyğun 5 yeni resept tamamlanmadı. Əvvəlki siyahı saxlanılıb; yenidən cəhd edə bilərsən.\n\n"
             + summary_text(view),
             reply_markup=summary_keyboard(view),
         )

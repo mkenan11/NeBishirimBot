@@ -30,13 +30,13 @@ class QuotaTests(unittest.TestCase):
         self.assertEqual([len(r["missing"]) for r in chosen], [0,0,0,1,2])
 
     def test_shared_display_order_with_filter_and_legacy_unsorted_page(self):
-        page = [recipe(0,2), recipe(1), recipe(2,1), recipe(3)]
+        page = [recipe(0,2), recipe(1), recipe(2,1), recipe(3), recipe(4), recipe(5)]
         page[1]["minutes"] = 20
         view = recipes.new_view("all", page, [], set(), set())
         view["time_limit"] = 90
         buttons = [b for row in recipes.summary_keyboard(view).inline_keyboard for b in row
                    if (b.callback_data or "").startswith("recipe:open:")]
-        self.assertEqual([b.callback_data for b in buttons], ["recipe:open:3", "recipe:open:2", "recipe:open:0"])
+        self.assertEqual([b.callback_data for b in buttons], ["recipe:open:3", "recipe:open:4", "recipe:open:5", "recipe:open:2", "recipe:open:0"])
         text = recipes.summary_text(view)
         for number, button in enumerate(buttons,1):
             self.assertTrue(button.text.startswith(f"{number}. "))
@@ -45,7 +45,7 @@ class QuotaTests(unittest.TestCase):
     def test_method_labels_are_localized_without_losing_identity(self):
         for code in recipes.METHOD_LABELS:
             self.assertEqual(recipes.method_key(recipes.method_label(code)), code)
-        view = recipes.new_view("all", [recipe(0, method="fry+boil")], [], set(), set())
+        view = recipes.new_view("owned", [recipe(n, method="fry+boil") for n in range(5)], [], set(), set())
         text = recipes.summary_text(view)
         self.assertNotIn("fry", text)
         self.assertIn("Qovurma və Qaynatma", text)
@@ -58,7 +58,23 @@ class QuotaTests(unittest.TestCase):
 
 
 class RefillTests(unittest.IsolatedAsyncioTestCase):
-    async def test_initial_partial_batch_returns_without_refill(self):
+    async def test_topups_run_concurrently(self):
+        started = set()
+        both_started = asyncio.Event()
+        async def generate(*args, **kwargs):
+            target = kwargs.get("missing_target")
+            if target is None:
+                return [recipe(n) for n in range(3)]
+            started.add(target)
+            if started == {1,2}:
+                both_started.set()
+            await asyncio.wait_for(both_started.wait(),0.2)
+            return [recipe(10+target,target)]
+        with patch.object(recipes,"candidates",side_effect=generate):
+            selected, *_ = await recipes.fill([],[],set(),set(),0,"all")
+        self.assertEqual([len(r["missing"]) for r in selected],[0,0,0,1,2])
+
+    async def test_partial_batch_is_completed_automatically(self):
         async def generate(*args, **kwargs):
             target = kwargs.get("missing_target")
             if target == 1:
@@ -68,29 +84,31 @@ class RefillTests(unittest.IsolatedAsyncioTestCase):
             return [recipe(i) for i in range(3)]
         with patch.object(recipes, "candidates", side_effect=generate) as ai:
             selected, *_ = await recipes.fill([], [], set(), set(), 0, "all", 90, 2)
-        self.assertEqual([len(r["missing"]) for r in selected], [0,0,0])
-        self.assertEqual(ai.call_count, 1)
-        self.assertEqual(ai.call_args.kwargs["requested_counts"], {0:3,1:1,2:1})
+        self.assertEqual([len(r["missing"]) for r in selected], [0,0,0,1,2])
+        self.assertEqual(ai.call_count, 3)
+        self.assertEqual(ai.call_args_list[0].kwargs["requested_counts"], {0:3,1:1,2:1})
 
     async def test_extra_mode_requests_both_groups_in_one_call(self):
         async def generate(*args, **kwargs):
             return [recipe(6,2)]
         with patch.object(recipes, "candidates", side_effect=generate) as ai:
             selected, *_ = await recipes.fill([], [], set(), set(), 0, "extra", 90, 2)
-        self.assertEqual(ai.call_args.kwargs["requested_counts"], {1:3,2:2})
-        self.assertEqual(ai.call_count, 1)
-        self.assertTrue(selected)
+        self.assertEqual(ai.call_args_list[0].kwargs["requested_counts"], {1:3,2:2})
+        self.assertLessEqual(ai.call_count, 3)
+        self.assertEqual(selected, [])
 
     async def test_timeout_preserves_existing_partial_results(self):
         with patch.object(recipes, "candidates", new_callable=AsyncMock, side_effect=TimeoutError):
-            selected, *_ = await recipes.fill([], [recipe(0)], set(), set(), 0, "all", 90, 2)
-        self.assertEqual(selected, [recipe(0)])
+            selected, pool, *_ = await recipes.fill([], [recipe(0)], set(), set(), 0, "all", 90, 2)
+        self.assertEqual(selected, [])
+        self.assertEqual(pool, [recipe(0)])
 
     async def test_cached_results_return_without_network(self):
         with patch.object(recipes, "candidates", new_callable=AsyncMock) as ai:
-            selected, *_ = await recipes.fill([], [recipe(0)], set(), set(), 0, "all", 90, 2)
+            page = [recipe(n, count) for n, count in enumerate((0,0,0,1,2))]
+            selected, *_ = await recipes.fill([], page, set(), set(), 0, "all", 90, 2)
         ai.assert_not_awaited()
-        self.assertEqual(selected, [recipe(0)])
+        self.assertEqual(selected, page)
 
     async def test_global_deadline_cancels_slow_generation(self):
         cancelled = asyncio.Event()
@@ -108,6 +126,19 @@ class RefillTests(unittest.IsolatedAsyncioTestCase):
 class DetailGuardTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         fixtures.FavoritesFlowTests.setUp(self)
+
+    async def test_failed_next_page_keeps_complete_previous_page(self):
+        page = [recipe(n,count) for n,count in enumerate((0,0,0,1,2))]
+        self.view["pages"] = [page]
+        self.query.data = "recipe:more"
+        with patch.object(recipes,"candidates",new_callable=AsyncMock,return_value=[recipe(99,1)]):
+            await recipes.recipe_click(self.update,self.context)
+        self.assertEqual(self.view["pages"],[page])
+        self.assertEqual(self.view["page"],0)
+        self.assertEqual(self.view["pool"],[recipe(99,1)])
+        markup=self.query.edit_message_text.call_args.kwargs["reply_markup"]
+        self.assertEqual(sum((b.callback_data or '').startswith('recipe:open:')
+                             for row in markup.inline_keyboard for b in row),5)
 
     async def test_completion_appends_without_replacing_cached_recipe(self):
         self.query.data = "recipe:complete"

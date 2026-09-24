@@ -47,7 +47,8 @@ class DiscoveryTests(unittest.TestCase):
         for keyboard in keyboards:
             self.assertFalse(any(":shop:" in (b.callback_data or "")
                                  for row in keyboard.inline_keyboard for b in row))
-        view = recipes.new_view("extra", [dict(item(), missing=["Duz"])], [], set(), set())
+        page = [dict(item(), missing=["Duz"] if n < 3 else ["Duz", "Qatıq"]) for n in range(5)]
+        view = recipes.new_view("extra", page, [], set(), set())
         self.assertIn("Çatışmayan: Duz", recipes.summary_text(view))
 
 
@@ -136,7 +137,7 @@ class DiscoveryInteractionTests(unittest.IsolatedAsyncioTestCase):
             selected, pool, _, _ = await recipes.fill(["Kartof"], [short, long], set(), set(), 0, "all", 90, 4)
         self.assertEqual(selected, [])
         self.assertEqual(pool, [short, long])
-        self.assertEqual(ai.await_count, recipes.MAX_REFILL)
+        self.assertLessEqual(ai.await_count, 4)
         self.assertEqual(ai.call_args.args[-2:], (90, 4))
 
     async def test_candidates_prompt_uses_range_servings_and_previous_combinations(self):
