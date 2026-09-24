@@ -12,8 +12,7 @@ from favorites_store import (
     list_favorites,
 )
 from recipes import detail_text, video_url, key
-from shopping_store import add_items
-from ui_utils import with_current_missing, edit_markup
+from ui_utils import with_current_missing
 from basket_ui import get_rows
 from command_controls import clear_pending_operations
 
@@ -151,15 +150,10 @@ async def show_favorites(update, context):
     )
 
 
-def favorite_detail_keyboard(recipe_id, page, recipe, shopping_added=False):
+def favorite_detail_keyboard(recipe_id, page, recipe):
     """Saxlanmis tam reseptin duymeleri."""
 
     rows = []
-    if recipe["missing"]:
-        rows.append([button(
-            "✅ Alış-veriş siyahısındadır" if shopping_added else "🛒 Alınacaqları siyahıya əlavə et",
-            f"favorite:shop:{recipe_id}:{page}",
-        )])
     rows.extend([
         [
             InlineKeyboardButton(
@@ -212,6 +206,10 @@ async def favorite_click(update, context):
 
     action = parts[1]
 
+    if action == "shop":
+        await query.answer("Alış-veriş bölməsi menyudan çıxarılıb. Çatışmayan ərzaqlar reseptdə göstərilir.", show_alert=True)
+        return
+
     try:
         if action == "page" and len(parts) == 3:
             page = int(parts[2])
@@ -233,7 +231,6 @@ async def favorite_click(update, context):
             "open",
             "deleteask",
             "deleteconfirm",
-            "shop",
         ) or len(parts) != 4:
             await query.answer(
                 "Düymə məlumatı yanlışdır.",
@@ -299,18 +296,9 @@ async def favorite_click(update, context):
             )
             return
 
-        if action in ("open", "shop"):
+        if action == "open":
             rows = await asyncio.to_thread(get_rows, user_id)
             recipe = with_current_missing(recipe, rows)
-            if action == "shop":
-                try:
-                    await asyncio.to_thread(add_items, user_id, recipe["missing"])
-                except ValueError as error:
-                    await query.answer(str(error), show_alert=True)
-                    return
-                await query.answer()
-                await edit_markup(query, favorite_detail_keyboard(recipe_id, page, recipe, shopping_added=True))
-                return
             await query.answer()
             text = detail_text(recipe)
             if len(text) > 3900:

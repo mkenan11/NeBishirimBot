@@ -39,7 +39,14 @@ Təsdiqdən sonra bu məlumatlar birlikdə silinir, çatdırılma qeydlərində
 istifadəçi ID-si boşaldılır. Anonim yeniləmə ID-si təkrar çatdırılmanı bloklayır.
 Telegram söhbət tarixçəsi və xarici xidmət qeydləri bu əməliyyatla silinmir.
 
-Alış-verişdə “alındı” işarəsi səbətə ərzaq əlavə etmir. Siyahı adları saxlayır;
-miqdarlar üçün reseptə baxılır. 30/60 dəqiqə filtri mövcud təklifləri süzür.
+Alış-veriş bölməsi menyudan gizlədilib; əvvəlki siyahılar saxlanır və hesab
+silinməsinə daxildir. Köhnə düymələr siyahını dəyişmir. Çatışmayan ərzaqlar
+reseptdə görünür. Vaxt seçimləri Hamısı, ≤30 dəq, 31–90 dəq-dir; Hamısı
+90 dəqiqədən uzun yeməkləri də əhatə edir. Köhnə 60 dəqiqə seçimi 31–90-a keçir.
+Filtrə basmaq mövcud siyahını süzür, AI çağırmır. Boş nəticədə ayrıca axtarış
+düyməsi var. Yeni axtarışlara vaxt və porsiya ötürülür; başqa aralıqdakı
+namizədlər itirilmir. Tam reseptin dəqiqləşən vaxtı yenidən yoxlanır.
+Ad və duz/istiot dəyişiklikləri eyni üsul və əsas ərzaqlarla yeni təklif sayılmır.
+Model təlimatları müxtəlif real yeməklər istəyir, keyfiyyətə zəmanət vermir.
 1/2/4 nəfər seçimi tam resept hazırlanmasına ötürülür; vaxt və temperatur
 sadəcə vurulmur. AI modeli bu dəyişikliklə əvəz edilmir.

@@ -83,11 +83,11 @@ class RecipeValidationTests(unittest.TestCase):
     def test_empty_filter_explains_next_action(self):
         view = recipes.new_view("all", [dict(self.short, minutes=90)], [], set(), set())
         view["time_limit"] = 30
-        self.assertIn("vaxt limitinə uyğun təklif yoxdur", recipes.summary_text(view))
+        self.assertIn("vaxt aralığına uyğun təklif yoxdur", recipes.summary_text(view))
 
     def test_help_and_menu_expose_new_features(self):
         labels = [button.text for row in bot.MENU.keyboard for button in row]
-        self.assertIn("🛒 Alış-veriş siyahısı", labels)
+        self.assertNotIn("🛒 Alış-veriş siyahısı", labels)
         text, markup = bot.help_view("privacy")
         self.assertIn("/delete_my_data", text)
         self.assertIn("help:delete", [b.callback_data for row in markup.inline_keyboard for b in row])
@@ -118,14 +118,14 @@ class RecipeInteractionTests(unittest.IsolatedAsyncioTestCase):
             save.assert_called_once_with(123, full)
         self.assertNotIn("servings", self.view["details"][(0, 0)])
 
-    async def test_shopping_add_uses_open_recipe_without_pantry_mutation(self):
+    async def test_old_shopping_button_explains_retirement(self):
         self.view["details"][(0, 0)]["missing"] = ["Duz"]
         await fixtures.FavoritesFlowTests.open_recipe(self)
         self.query.data = "recipe:shop:" + self.state["active_detail"]["token"]
-        with patch.object(recipes, "add_items", return_value=1) as add:
+        with patch("shopping_store.add_items") as add:
             await recipes.recipe_click(self.update, self.context)
-            add.assert_called_once_with(123, ["Duz"])
-        self.assertTrue(self.state["active_detail"]["shopping_added"])
+            add.assert_not_called()
+        self.assertIn("menyudan çıxarılıb", self.query.answer.call_args.args[0])
         self.query.message.reply_text.assert_not_awaited()
 
     async def test_generate_prompt_matches_requested_servings(self):

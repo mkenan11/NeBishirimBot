@@ -32,7 +32,6 @@ from favorites_ui import show_favorites, favorite_click
 from command_controls import clear_pending_operations
 from ingredient_names import ingredient_key, normalize_name, split_ingredients
 from pantry_store import add_ingredients
-from shopping_ui import show_shopping, shopping_click
 from account_data import request_deletion, account_click
 from error_handlers import report_error
 
@@ -42,8 +41,7 @@ DB_PATH = BASE_DIR / "ingredients.db"
 MENU = ReplyKeyboardMarkup(
     [
         ["🧺 Ərzaqlarım", "🍽️ Nə bişirim?"],
-        ["⭐ Seçilmiş reseptlər", "🛒 Alış-veriş siyahısı"],
-        ["ℹ️ Kömək"],
+        ["⭐ Seçilmiş reseptlər", "ℹ️ Kömək"],
     ],
     resize_keyboard=True,
     is_persistent=True,
@@ -521,10 +519,12 @@ def help_view(section="main"):
             "6. Bəyəndiyin resepti «⭐ Seçilmişlərə əlavə et» "
             "düyməsi ilə saxla. «⭐ Seçilmiş reseptlər» bölməsində "
             "yenidən aça və ya silə bilərsən.\n"
-            "7. Resept siyahısında 1, 2 və ya 4 nəfər seç; 30/60 dəqiqə filtrini tətbiq et. "
-            "Filtr hazırkı təkliflərə əsaslanır.\n"
-            "8. Reseptin alınacaq ərzaqlarını alış-veriş siyahısına əlavə et. "
-            "Alınanları işarələmək onları avtomatik səbətə əlavə etmir.\n\n"
+            "7. Resept siyahısında 1, 2 və ya 4 nəfər seç. Vaxt seçimləri: "
+            "Hamısı, ≤30 dəq və 31–90 dəq. Vaxta hazırlıq, bişirmə və gözləmə daxildir. "
+            "Uyğun təklif yoxdursa «Bu vaxta uyğun reseptlər tap» seç.\n"
+            "8. «Yalnız evdəkilərlə» əlavə ərzaqsız yeməklər göstərir; "
+            "«Əlavə 1–2 ərzaqla» seçimində çatışmayan məhsullar siyahıda görünür. "
+            "«Başqa təkliflər» cari seçimlərinə uyğun yeni yeməklər axtarır.\n\n"
             "Qeyd: Fotodan tanınan ərzaqlar sən təsdiqləyənədək "
             "səbətə əlavə olunmur."
         )
@@ -602,6 +602,16 @@ def help_view(section="main"):
     return text, keyboard
 
 
+async def shopping_retired(update, context):
+    """Handle old commands/buttons without changing stored shopping data."""
+    text = "Alış-veriş bölməsi menyudan çıxarılıb. Çatışmayan ərzaqlar hər reseptdə göstərilir."
+    if update.callback_query:
+        await update.callback_query.answer(text, show_alert=True)
+        return
+    clear_pending_operations(context)
+    await update.effective_message.reply_text(text, reply_markup=MENU)
+
+
 async def show_help(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -675,11 +685,11 @@ def create_application():
 
     install_session_handlers(app)
     app.add_error_handler(report_error)
-    app.add_handler(CommandHandler("shopping", show_shopping))
+    app.add_handler(CommandHandler("shopping", shopping_retired))
     app.add_handler(CommandHandler("delete_my_data", request_deletion))
-    app.add_handler(CallbackQueryHandler(shopping_click, pattern=r"^shop:"))
+    app.add_handler(CallbackQueryHandler(shopping_retired, pattern=r"^shop:"))
     app.add_handler(CallbackQueryHandler(account_click, pattern=r"^account:"))
-    app.add_handler(MessageHandler(filters.Regex(r"^🛒 Alış-veriş siyahısı$"), show_shopping))
+    app.add_handler(MessageHandler(filters.Regex(r"^🛒 Alış-veriş siyahısı$"), shopping_retired))
 
     app.add_handler(
         CommandHandler("start", start)

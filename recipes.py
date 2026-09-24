@@ -15,8 +15,7 @@ from basket_ui import basket_view, get_rows
 from favorites_store import is_favorite, save_favorite
 from command_controls import clear_pending_operations
 from ingredient_names import ingredient_key, normalize_name
-from shopping_store import add_items
-from ui_utils import edit_query, edit_markup
+from ui_utils import edit_query
 
 
 LOG = logging.getLogger(__name__)
@@ -29,10 +28,36 @@ MAX_REFILL = 2
 MODE_ALL, MODE_HOME, MODE_SHOP = "all", "owned", "extra"
 
 MODE_NAMES = {
-    MODE_ALL: "Hamısı",
-    MODE_HOME: "Evdəkilərlə",
-    MODE_SHOP: "1–2 ərzaq əlavə etsəm",
+    MODE_ALL: "Bütün təkliflər",
+    MODE_HOME: "Yalnız evdəkilərlə",
+    MODE_SHOP: "Əlavə 1–2 ərzaqla",
 }
+
+TIME_LABELS = {0: "Hamısı", 30: "≤30 dəq", 90: "31–90 dəq"}
+
+
+def time_range(value):
+    # Sessions saved before the non-overlapping ranges used 60 as an upper bound.
+    return 90 if value == 60 else value if value in TIME_LABELS else 0
+
+
+def matches_time(minutes, value):
+    value = time_range(value)
+    return value == 0 or (minutes <= 30 if value == 30 else 30 < minutes <= 90)
+
+
+def method_key(value):
+    text = norm(value)
+    families = (
+        ("oven", ("soba", "sobada", "firin", "fırın")),
+        ("fry", ("qızart", "qovur", "sote")),
+        ("boil", ("qaynat", "qaynad", "suda biş")),
+        ("steam", ("buxar",)),
+        ("stew", ("pörtlət", "pörtmə", "öz suyunda")),
+        ("mix", ("qarışdır", "bişirmədən", "çiy")),
+        ("grill", ("qril", "manqal",)),
+    )
+    return "+".join(code for code, words in families if any(word in text for word in words)) or text
 
 WATER = {
     "su",
@@ -132,12 +157,21 @@ def video_url(name):
 
 def signature(item):
     return (
-        norm(item["method"]),
+        method_key(item["method"]),
         frozenset(
             key(x)
             for x in item["ingredients"]
         ),
     )
+
+
+def duplicate_signature(sign, signatures):
+    # Incidental seasoning changes do not make a new recipe.
+    incidental = {"su", "duz", "istiot", "qara istiot"}
+    method, ingredients = sign
+    core = ingredients - incidental
+    return any(method_key(old_method) == method and core == old_items - incidental
+               for old_method, old_items in signatures)
 
 
 def oils(name):
@@ -277,7 +311,7 @@ def clean_short(batch, basket, history, signatures):
 
         sign = signature(candidate)
 
-        if sign in sigs:
+        if duplicate_signature(sign, sigs):
             continue
 
         names.add(norm(title))
@@ -324,7 +358,7 @@ def pick(pool, mode):
     methods = {}
 
     for item in choices:
-        method = norm(item["method"])
+        method = method_key(item["method"])
 
         if methods.get(method, 0) < 2:
             selected.append(item)
@@ -401,6 +435,8 @@ async def candidates(
     page,
     attempt,
     target,
+    time_limit=0,
+    servings=2,
 ):
     if target == MODE_HOME:
         goal = (
@@ -443,14 +479,36 @@ async def candidates(
 
         "İSTİQAMƏT: "
         + focus(basket, page, attempt)
-        + "\n"
+        + ". Bu yalnız əlavə ilhamdır, siyahını bu yemək növü ilə məhdudlaşdırma.\n"
 
         "ŞƏRT: "
         + goal
         + "\n"
 
-        "14 müxtəlif REAL yemək namizədi təklif et; "
+        + f"PORSİYA: {servings} nəfər.\n"
+        + ("VAXT: hazırlıq, bişirmə və məcburi gözləmə daxil 30 dəqiqədən çox olmasın.\n"
+           if time_range(time_limit) == 30 else
+           "VAXT: hazırlıq, bişirmə və məcburi gözləmə daxil 31–90 dəqiqə olsun.\n"
+           if time_range(time_limit) == 90 else "VAXT: məhdudiyyət yoxdur; qısa və uzun yeməkləri qarışıq seç.\n")
+        + "ƏVVƏLKİ ÜSUL VƏ ƏRZAQ BİRLƏŞMƏLƏRİ: "
+        + "; ".join(method + ": " + ", ".join(sorted(items))
+                    for method, items in sorted(signatures, key=lambda s: (s[0], sorted(s[1])))[:60])
+        + "\n"
+
+        + "Ən çox 14 müxtəlif REAL yemək namizədi təklif et; "
         "uydurma yeməklərlə say artırma. "
+
+        "Sadəcə qaynadılmış və qızardılmış tək ərzaq variantları ilə siyahını doldurma. "
+        "Uyğun olduqda əsas yemək, şorba, soba yeməyi, içlikli yemək, salat və "
+        "xəmir yeməkləri arasından fərqli real variantlar seç. Bunlar məcburi kvota deyil. "
+        "Namizədləri seçməzdən əvvəl səbətlə hazırlana bilən fərqli yemək ailələrini nəzərdən keçir; "
+        "hamısı omlet, püre, qaynatma və qovurma olmasın. "
+        "Azərbaycan və digər mətbəxlərin səbətə uyğun tanınan yeməklərini nəzərdən keçir; "
+        "əsas ərzağı çatmayan klassik yeməyin adını istifadə etmə. "
+        "Eyni yeməyi adını, doğrama formasını, duzunu və ya bir ədviyyatını dəyişərək təkrarlama. "
+        "Qısa vaxt maraqsız, uzun vaxt isə mütləq mürəkkəb demək deyil. "
+        "Vaxt aralığına düşmək üçün müddəti süni uzatma və ya qısaltma. "
+        "Uyğun müxtəlif yemək azdırsa, daha az namizəd qaytar. "
 
         "Fərqli yemək növü və hazırlama üsulu seç. "
         "Ərzaqların tam adlarını yaz. "
@@ -507,8 +565,11 @@ async def fill(
     signatures,
     page,
     mode,
+    time_limit=0,
+    servings=2,
 ):
-    pool = list(pool)
+    deferred = [x for x in pool if not matches_time(x["minutes"], time_limit)]
+    pool = [x for x in pool if matches_time(x["minutes"], time_limit)]
     history = set(history)
     signatures = set(signatures)
 
@@ -546,6 +607,8 @@ async def fill(
                 page,
                 attempt,
                 target,
+                time_limit,
+                servings,
             )
 
         except Exception:
@@ -554,7 +617,8 @@ async def fill(
 
             break
 
-        pool.extend(fresh)
+        pool.extend(x for x in fresh if matches_time(x["minutes"], time_limit))
+        deferred.extend(x for x in fresh if not matches_time(x["minutes"], time_limit))
 
         history.update(
             norm(x["name"])
@@ -570,6 +634,7 @@ async def fill(
         pool,
         mode,
     )
+    remainder.extend(deferred)
 
     return (
         selected,
@@ -1034,10 +1099,15 @@ async def make_full(short, basket, species=None, servings=2):
         + str(short["minutes"])
         + " dəqiqə.\n"
 
+        + ("Bu yemək yalnız evdəki ərzaqlarla seçilib: su xaric səbətdə olmayan heç bir məhsul əlavə etmə.\n"
+           if not short["missing"] else "Çatışmayan məhsulların sayı su xaric ən çox 2 olsun.\n")
+
         + kind +
 
         "name və method sahələrini eynilə saxla. "
-        "Yeməyi başqa üsula çevirmə. "
+        "Yeməyi başqa üsula çevirmə və seçilmiş yeməyi sadə qaynatma variantına endirmə. "
+        "Yeməyin fərqləndirici teksturasını və hazırlanma mərhələlərini qoru. "
+        "Təlimat aydın olsun, addım sayını doldurmaq üçün mənasız mərhələ əlavə etmə. "
 
         f"{servings} nəfərlik real təxmini miqdarlar; "
         "isti yeməklərdə 6–10, bişirilməyən salatlarda 3–6 konkret addım yaz. "
@@ -1148,19 +1218,17 @@ async def make_full(short, basket, species=None, servings=2):
 # ============================================================
 
 def visible_recipes(view):
-    limit = view.get("time_limit", 0)
+    limit = time_range(view.get("time_limit", 0))
     return [(i, recipe) for i, recipe in enumerate(view["pages"][view["page"]])
-            if not limit or recipe["minutes"] <= limit]
+            if matches_time(recipe["minutes"], limit)]
 
 
 def summary_text(view):
-    recipes = view["pages"][view["page"]]
-
     lines = [
         "🍽️ Nə bişirim?",
         "",
         "Seçim: " + MODE_NAMES[view["mode"]],
-        f"👥 {view.get('servings', 2)} nəfərlik · ⏱️ " + (f"{view['time_limit']} dəq-dək" if view.get('time_limit') else "Vaxt limiti yoxdur"),
+        f"👥 {view.get('servings', 2)} nəfərlik · ⏱️ " + TIME_LABELS[time_range(view.get("time_limit", 0))],
         (
             f"Səhifə {view['page'] + 1}/"
             f"{len(view['pages'])} · "
@@ -1170,8 +1238,8 @@ def summary_text(view):
     ]
 
     groups = (
-        ("✅ Evdəki ərzaqlarla", False),
-        ("🛒 1–2 ərzaq əlavə etsən", True),
+        ("✅ Yalnız evdəkilərlə", False),
+        ("➕ Əlavə 1–2 ərzaqla", True),
     )
 
     for header, has_missing in groups:
@@ -1198,16 +1266,20 @@ def summary_text(view):
 
             if recipe["missing"]:
                 lines.append(
-                    "   Alınacaq: "
+                    "   Çatışmayan: "
                     + ", ".join(recipe["missing"])
                 )
 
         lines.append("")
 
     if not visible_recipes(view):
-        lines.append("Bu səhifədə vaxt limitinə uyğun təklif yoxdur. Limiti dəyiş və ya başqa reseptlərə bax.")
+        lines.append("Bu səhifədə seçilmiş vaxt aralığına uyğun təklif yoxdur. Digər səhifələrə bax və ya bu vaxta uyğun reseptlər axtar."
+                     if time_range(view.get("time_limit", 0)) else
+                     "Bu seçimdə uyğun təklif tapılmadı. Başqa təkliflər axtar və ya ərzaq seçimini dəyiş.")
+    if view.get("search_note"):
+        lines.append(view["search_note"])
     lines.append(
-        "ℹ️ Vaxt filtri mövcud təkliflərə tətbiq olunur. Səbətdə miqdar yoxdur. "
+        "ℹ️ Vaxt hazırlıq, bişirmə və gözləmə daxil təxminidir. Səbətdə miqdar yoxdur. "
         "Reseptdə yazılan miqdarları evdə yoxla."
     )
 
@@ -1220,8 +1292,6 @@ def summary_keyboard(view):
     YouTube yalnız tam reseptin içində görünür.
     """
 
-    recipes = view["pages"][view["page"]]
-
     rows = [
         [
             btn(
@@ -1229,7 +1299,7 @@ def summary_keyboard(view):
                     "● "
                     if view["mode"] == MODE_ALL
                     else ""
-                ) + "🍽️ Hamısı",
+                ) + "🍽️ Bütün təkliflər",
                 "recipe:mode:all",
             ),
 
@@ -1238,7 +1308,7 @@ def summary_keyboard(view):
                     "● "
                     if view["mode"] == MODE_HOME
                     else ""
-                ) + "✅ Evdəkilərlə",
+                ) + "✅ Yalnız evdəkilərlə",
                 "recipe:mode:owned",
             ),
         ],
@@ -1249,15 +1319,15 @@ def summary_keyboard(view):
                     "● "
                     if view["mode"] == MODE_SHOP
                     else ""
-                ) + "🛒 1–2 ərzaq əlavə etsəm",
+                ) + "➕ Əlavə 1–2 ərzaqla",
                 "recipe:mode:extra",
             )
         ],
     ]
 
     rows.append([
-        btn(("● " if view.get("time_limit", 0) == value else "") + label, f"recipe:time:{value}")
-        for value, label in ((0, "⏱️ Hamısı"), (30, "≤30 dəq"), (60, "≤60 dəq"))
+        btn(("● " if time_range(view.get("time_limit", 0)) == value else "") + label, f"recipe:time:{value}")
+        for value, label in TIME_LABELS.items()
     ])
     rows.append([
         btn(("● " if view.get("servings", 2) == value else "") + f"👥 {value} nəfər", f"recipe:servings:{value}")
@@ -1292,6 +1362,9 @@ def summary_keyboard(view):
     if navigation:
         rows.append(navigation)
 
+    if not visible_recipes(view) and time_range(view.get("time_limit", 0)) and len(view["pages"]) < MAX_PAGES:
+        rows.append([btn("🔍 Bu vaxta uyğun reseptlər tap", "recipe:findtime")])
+
     if (
         view["page"] == len(view["pages"]) - 1
         and len(view["pages"]) < MAX_PAGES
@@ -1299,7 +1372,7 @@ def summary_keyboard(view):
     ):
         rows.append([
             btn(
-                "🔄 Başqa reseptlər",
+                "🔄 Başqa təkliflər",
                 "recipe:more",
             )
         ])
@@ -1444,7 +1517,7 @@ def detail_text(recipe, compact_missing=False):
     return "\n".join(lines)
 
 
-def detail_keyboard(recipe, save_token=None, saved=False, shopping_added=False):
+def detail_keyboard(recipe, save_token=None, saved=False):
     rows = []
     if save_token is not None:
         rows.append([
@@ -1453,11 +1526,6 @@ def detail_keyboard(recipe, save_token=None, saved=False, shopping_added=False):
                 f"recipe:save:{save_token}",
             )
         ])
-    if save_token is not None and recipe["missing"]:
-        rows.append([btn(
-            "✅ Alış-veriş siyahısındadır" if shopping_added else "🛒 Alınacaqları siyahıya əlavə et",
-            f"recipe:shop:{save_token}",
-        )])
     rows.extend([
         [
             InlineKeyboardButton(
@@ -1506,6 +1574,8 @@ def new_view(
         "empty_runs": 0,
         "time_limit": 0,
         "servings": 2,
+        "search_note": ("Bu şərtlərlə yalnız bu qədər uyğun təklif tapıldı."
+                        if 0 < len(recipes) < PAGE_SIZE else ""),
     }
 
 
@@ -1561,6 +1631,7 @@ async def recipe_start(update, context):
     context.user_data["recipe_message_id"] = (
         status.message_id
     )
+    preferences = context.user_data.get("recipe_preferences", {})
 
     try:
         (
@@ -1578,6 +1649,8 @@ async def recipe_start(update, context):
             set(),
             0,
             MODE_ALL,
+            time_range(preferences.get("time_limit", 0)),
+            preferences.get("servings", 2),
         )
 
     except Exception as error:
@@ -1590,13 +1663,6 @@ async def recipe_start(update, context):
     if tuple(get_rows(user_id)) != basket_rows:
         await status.edit_text(
             "Səbət dəyişib. Yenidən «Nə bişirim?» seç."
-        )
-        return
-
-    if not recipes:
-        await status.edit_text(
-            "Uyğun resept tapılmadı. "
-            "Başqa ərzaq əlavə et."
         )
         return
 
@@ -1651,7 +1717,11 @@ async def recipe_click(update, context):
         else ""
     )
 
-    if action not in ("save", "shop"):
+    if action == "shop":
+        await q.answer("Alış-veriş bölməsi menyudan çıxarılıb. Çatışmayan ərzaqları reseptdə görə bilərsən.", show_alert=True)
+        return
+
+    if action != "save":
         await q.answer()
 
     # --------------------------------------------------------
@@ -1684,7 +1754,7 @@ async def recipe_click(update, context):
     )
 
     if not state:
-        if action in ("save", "shop"):
+        if action == "save":
             await q.answer("Resepti yenidən aç.", show_alert=True)
         await q.edit_message_text(
             "Resept axtarışını yenidən başlat."
@@ -1695,7 +1765,7 @@ async def recipe_click(update, context):
         tuple(get_rows(user_id))
         != state["basket"]
     ):
-        if action in ("save", "shop"):
+        if action == "save":
             await q.answer("Səbət dəyişib. Reseptləri yenidən axtar.", show_alert=True)
         context.user_data.pop(
             "recipe_state",
@@ -1712,7 +1782,7 @@ async def recipe_click(update, context):
         state["mode"]
     ]
 
-    if action in ("save", "shop"):
+    if action == "save":
         active = state.get("active_detail")
         if (
             len(parts) != 3
@@ -1729,18 +1799,6 @@ async def recipe_click(update, context):
         full = view["details"].get(active.get("cache_key", (active["page"], active["index"])))
         if full is None:
             await q.answer("Resepti yenidən açıb yadda saxla.", show_alert=True)
-            return
-
-        if action == "shop":
-            try:
-                await asyncio.to_thread(add_items, user_id, full["missing"])
-            except ValueError as error:
-                await q.answer(str(error), show_alert=True)
-                return
-            await q.answer()
-            await edit_markup(q, detail_keyboard(
-                full, active["token"], saved=active.get("saved", False), shopping_added=True))
-            active["shopping_added"] = True
             return
 
         if active.get("saved"):
@@ -1760,7 +1818,7 @@ async def recipe_click(update, context):
         await q.answer()
         try:
             await q.edit_message_reply_markup(
-                reply_markup=detail_keyboard(full, active["token"], saved=True, shopping_added=active.get("shopping_added", False)),
+                reply_markup=detail_keyboard(full, active["token"], saved=True),
             )
         except BadRequest as error:
             # Telegram dəyişib, sessiya yazılmayıbsa retry eyni düyməni göstərə bilər.
@@ -1773,13 +1831,18 @@ async def recipe_click(update, context):
     state.pop("active_detail", None)
 
     if action in ("time", "servings"):
-        allowed = (0, 30, 60) if action == "time" else (1, 2, 4)
+        allowed = (0, 30, 60, 90) if action == "time" else (1, 2, 4)
         if len(parts) != 3 or not parts[2].isdigit() or int(parts[2]) not in allowed:
             return
         setting = "time_limit" if action == "time" else "servings"
         value = int(parts[2])
+        if action == "time":
+            value = time_range(value)
         for other_view in state["views"].values():
             other_view[setting] = value
+            other_view["exhausted"] = False
+            other_view["empty_runs"] = 0
+            other_view.pop("search_note", None)
         context.user_data.setdefault("recipe_preferences", {})[setting] = value
         state.pop("pending_meat", None)
         await edit_query(q, summary_text(view), summary_keyboard(view))
@@ -1830,6 +1893,8 @@ async def recipe_click(update, context):
                 set(),
                 0,
                 mode,
+                time_range(view.get("time_limit", 0)),
+                view.get("servings", 2),
             )
 
         except Exception as error:
@@ -1853,14 +1918,6 @@ async def recipe_click(update, context):
 
             await q.edit_message_text(
                 "Səbət dəyişib. Yenidən axtar."
-            )
-            return
-
-        if not recipes:
-            await q.edit_message_text(
-                "Bu seçimdə resept tapılmadı.\n\n"
-                + summary_text(view),
-                reply_markup=summary_keyboard(view),
             )
             return
 
@@ -2126,8 +2183,8 @@ async def recipe_click(update, context):
             view["details"][cache_key] = full
 
         recipes[index]["minutes"] = full["total"]
-        if view.get("time_limit") and full["total"] > view["time_limit"]:
-            await edit_query(q, "Bu porsiya üçün dəqiqləşən vaxt limitdən uzundur.\n\n" + summary_text(view), summary_keyboard(view))
+        if not matches_time(full["total"], view.get("time_limit", 0)):
+            await edit_query(q, "Bu porsiya üçün dəqiqləşən vaxt seçilmiş aralığa uyğun deyil.\n\n" + summary_text(view), summary_keyboard(view))
             return
         save_token = secrets.token_hex(8)
         try:
@@ -2154,10 +2211,12 @@ async def recipe_click(update, context):
     # --------------------------------------------------------
 
     if (
-        action != "more"
-        or view["exhausted"]
-        or view["page"] != len(view["pages"]) - 1
+        action not in ("more", "findtime")
+        or (action == "more" and (view["exhausted"] or view["page"] != len(view["pages"]) - 1))
     ):
+        return
+
+    if action == "findtime" and (visible_recipes(view) or not time_range(view.get("time_limit", 0))):
         return
 
     if len(view["pages"]) >= MAX_PAGES:
@@ -2183,6 +2242,8 @@ async def recipe_click(update, context):
             view["signatures"],
             len(view["pages"]),
             view["mode"],
+            time_range(view.get("time_limit", 0)),
+            view.get("servings", 2),
         )
 
     except Exception as error:
@@ -2209,6 +2270,9 @@ async def recipe_click(update, context):
         )
         return
 
+    view["pool"] = pool
+    view["history"] = history
+    view["signatures"] = signatures
     if not recipes:
         view["empty_runs"] += 1
 
@@ -2217,20 +2281,18 @@ async def recipe_click(update, context):
         )
 
         await q.edit_message_text(
-            "Yeni uyğun resept tapılmadı.\n\n"
+            "Bu şərtlərlə yeni və fərqli resept tapılmadı. Vaxt və ya ərzaq seçimini dəyişə bilərsən.\n\n"
             + summary_text(view),
             reply_markup=summary_keyboard(view),
         )
         return
 
     view["empty_runs"] = 0
+    view["search_note"] = ("Bu şərtlərlə yalnız bu qədər yeni uyğun təklif tapıldı."
+                           if len(recipes) < PAGE_SIZE else "")
 
     view["pages"].append(recipes)
-    view["page"] += 1
-
-    view["pool"] = pool
-    view["history"] = history
-    view["signatures"] = signatures
+    view["page"] = len(view["pages"]) - 1
 
     await q.edit_message_text(
         summary_text(view),
