@@ -23,7 +23,7 @@ LOG = logging.getLogger(__name__)
 
 PAGE_SIZE = 5
 MAX_PAGES = 10
-MAX_REFILL = 2
+MAX_REFILL = 4
 
 MODE_ALL, MODE_HOME, MODE_SHOP = "all", "owned", "extra"
 
@@ -34,6 +34,15 @@ MODE_NAMES = {
 }
 
 TIME_LABELS = {0: "Hamısı", 45: "≤45 dəq", 90: "46–90 dəq"}
+
+METHOD_LABELS = {"fry": "Qovurma", "boil": "Qaynatma", "oven": "Sobada bişirmə",
+                 "steam": "Buxarda bişirmə", "stew": "Pörtlətmə", "mix": "Qarışdırma",
+                 "grill": "Qrildə bişirmə"}
+
+
+def method_label(value):
+    return re.sub(r"\b(?:fry|boil|oven|steam|stew|mix|grill)\b",
+                  lambda match: METHOD_LABELS[match.group().lower()], value, flags=re.I).replace("+", " və ")
 
 
 def time_range(value):
@@ -220,7 +229,7 @@ def clean_short(batch, basket, history, signatures):
 
     for raw in batch.recipes[:20]:
         title = " ".join(raw.name.split())
-        method = " ".join(raw.method.split())
+        method = method_label(" ".join(raw.method.split()))
 
         if (
             not title
@@ -327,88 +336,30 @@ def clean_short(batch, basket, history, signatures):
 # SƏHİFƏLƏR
 # ============================================================
 
+def quotas(mode):
+    return {0: 5} if mode == MODE_HOME else {1: 3, 2: 2} if mode == MODE_SHOP else {0: 3, 1: 1, 2: 1}
+
+
+def deficits(pool, mode):
+    return {count: max(0, needed - sum(len(x["missing"]) == count for x in pool))
+            for count, needed in quotas(mode).items()}
+
+
 def pick(pool, mode):
-    home = [
-        x
-        for x in pool
-        if not x["missing"]
-    ]
-
-    shop = [
-        x
-        for x in pool
-        if x["missing"]
-    ]
-
-    if mode == MODE_HOME:
-        choices = home
-
-    elif mode == MODE_SHOP:
-        choices = shop
-
-    else:
-        choices = home[:3] + shop[:2]
-
-        choices += [
-            x
-            for x in pool
-            if x not in choices
-        ]
-
-    selected = []
-    methods = {}
-
-    for item in choices:
-        method = method_key(item["method"])
-
-        if methods.get(method, 0) < 2:
-            selected.append(item)
-
-            methods[method] = (
-                methods.get(method, 0) + 1
-            )
-
-        if len(selected) == PAGE_SIZE:
-            break
-
-    for item in choices:
-        if len(selected) == PAGE_SIZE:
-            break
-
-        if item not in selected:
-            selected.append(item)
-
-    remainder = [
-        x
-        for x in pool
-        if x not in selected
-    ]
-
-    return selected, remainder
+    selected, methods = [], {}
+    for count, needed in quotas(mode).items():
+        choices = [x for x in pool if len(x["missing"]) == count]
+        for _ in range(min(needed, len(choices))):
+            chosen = min(choices, key=lambda x: methods.get(method_key(x["method"]), 0))
+            choices.remove(chosen)
+            selected.append(chosen)
+            method = method_key(chosen["method"])
+            methods[method] = methods.get(method, 0) + 1
+    return selected, [x for x in pool if x not in selected]
 
 
 def lacking(pool, mode):
-    home = sum(
-        not x["missing"]
-        for x in pool
-    )
-
-    shop = sum(
-        bool(x["missing"])
-        for x in pool
-    )
-
-    if mode == MODE_HOME:
-        return home < 5
-
-    if mode == MODE_SHOP:
-        return shop < 5
-
-    return (
-        len(pool) < 5
-        or home < 3
-        or shop < 2
-    )
+    return any(deficits(pool, mode).values())
 
 
 def focus(basket, page, attempt):
@@ -438,6 +389,7 @@ async def candidates(
     target,
     time_limit=0,
     servings=2,
+    missing_target=None,
 ):
     if target == MODE_HOME:
         goal = (
@@ -446,9 +398,25 @@ async def candidates(
         )
 
     elif target == MODE_SHOP:
-        goal = (
-            "Hər reseptdə səbətdə olmayan TAM 1–2 "
-            "real əlavə məhsul olsun. "
+        if missing_target == 1:
+            goal = (
+                "Hər reseptdə səbətdə olmayan dəqiq 1 "
+                "real əlavə məhsul olsun. "
+            )
+        elif missing_target == 2:
+            goal = (
+                "Hər reseptdə səbətdə olmayan dəqiq 2 "
+                "real əlavə məhsul olsun. Hər iki məhsul "
+                "reseptə həqiqətən lazım olmalıdır; sırf "
+                "sayı tamamlamaq üçün məhsul əlavə etmə. "
+            )
+        else:
+            goal = (
+                "Hər reseptdə səbətdə olmayan TAM 1–2 "
+                "real əlavə məhsul olsun. "
+            )
+
+        goal += (
             "Yeni məhsullar yemək imkanlarını həqiqətən "
             "artırsın; həmişə yalnız yağ təklif etmə. "
             "Məsələn səbətə uyğun göbələk, qatıq, "
@@ -459,8 +427,10 @@ async def candidates(
 
     else:
         goal = (
-            "Təxminən yarısı evdəki ərzaqlarla, "
-            "qalanları 1–2 əlavə ərzaqla olsun."
+            "Təxminən 3 resept yalnız evdəki ərzaqlarla, "
+            "1 resept 1 əlavə ərzaqla, 1 resept isə "
+            "2 əlavə ərzaqla olsun. Bu bölgü prioritetdir, "
+            "uyğun resept yoxdursa məcburi deyil."
         )
 
     prompt = (
@@ -492,12 +462,19 @@ async def candidates(
            "VAXT: hazırlıq, bişirmə və məcburi gözləmə daxil 46–90 dəqiqə olsun.\n"
            if time_range(time_limit) == 90 else "VAXT: məhdudiyyət yoxdur; qısa və uzun yeməkləri qarışıq seç.\n")
         + "ƏVVƏLKİ ÜSUL VƏ ƏRZAQ BİRLƏŞMƏLƏRİ: "
-        + "; ".join(method + ": " + ", ".join(sorted(items))
+        + "; ".join(method_label(method) + ": " + ", ".join(sorted(items))
                     for method, items in sorted(signatures, key=lambda s: (s[0], sorted(s[1])))[:60])
         + "\n"
 
         + "Ən çox 14 müxtəlif REAL yemək namizədi təklif et; "
         "uydurma yeməklərlə say artırma. "
+
+        "Namizədləri balanslı seç: təxminən 2 sadə və etibarlı, "
+        "2 orta zənginlikdə, 1 daha yaradıcı variant olsun. "
+        "Mümkün olduqda şorba və ya sulu yemək, əsas qazan yeməyi, "
+        "soba və ya tava yeməyi, salat/lavaş və fərqli bir yemək "
+        "ailəsi arasında müxtəliflik yarat. Bu kateqoriyalar sərt "
+        "kvota deyil; səbət uyğun deyilsə məcbur etmə. "
 
         "Sadəcə qaynadılmış və qızardılmış tək ərzaq variantları ilə siyahını doldurma. "
         "Uyğun olduqda əsas yemək, şorba, soba yeməyi, içlikli yemək, salat və "
@@ -514,11 +491,28 @@ async def candidates(
         "Fərqli yemək növü və hazırlama üsulu seç. "
         "Ərzaqların tam adlarını yaz. "
 
+        "Uyğun olduqda səbətdəki 4-8 əsas ərzağı məqsədli şəkildə "
+        "bir reseptdə birləşdir. Sadəcə iki məhsulu birləşdirib "
+        "resept yaratma; amma uyğun olmayan məhsulları da zorla "
+        "eyni yeməyə əlavə etmə. "
+
+        "Eyni əsas məhsullardan istifadə edən reseptlərdə belə "
+        "hazırlama üsulunu və yemək ailəsini dəyiş. "
+        "Əvvəlki reseptlərə oxşarlığı azalt, amma bütün namizədləri "
+        "sərt şəkildə fərqli etməyə çalışıb keyfiyyəti aşağı salma. "
+
         "Adi içməli Su həmişə var, lakin istifadə "
         "olunursa ingredients siyahısında Su yaz. "
 
         "Duz, yağ, şəkər, ədviyyat və digər ərzaqları "
         "səbətdə yoxdursa mövcud sayma. "
+
+        "Çatışmayan məhsul yalnız yeməyin hazırlanması üçün "
+        "həqiqətən zəruri olan əsas ingredient olsun. Könüllü "
+        "yağlama, bəzək, servis, dadlandırma və ya əvəz edilə "
+        "bilən məhsulu çatışmayan kimi yazma. Çatışmayan hər "
+        "məhsul reseptin ingredient siyahısında real komponent "
+        "kimi istifadə olunmalıdır. "
 
         "Su xaric hər reseptdə maksimum 2 əlavə "
         "ərzaq ola bilər. "
@@ -536,6 +530,7 @@ async def candidates(
         "Səbətdə olan adları eynilə yaz. "
 
         "name = ad, method = bişirmə üsulu, "
+        "method Azərbaycan dilində yazılsın, texniki və ingiliscə adlar işlətmə. "
 
         "minutes = ümumi təxmini vaxt "
         "(hazırlıq, bişirmə, məcburi soyutma daxil), "
@@ -548,7 +543,7 @@ async def candidates(
     batch = await ask_gemini(
         prompt,
         ShortBatch,
-        temperature=0.6,
+        temperature=0.7,
     )
 
     return clean_short(
@@ -574,34 +569,25 @@ async def fill(
     history = set(history)
     signatures = set(signatures)
 
+    attempts = {0: 0, 1: 0, 2: 0}
+    deadline = asyncio.get_running_loop().time() + 120
     for attempt in range(MAX_REFILL):
-        if not lacking(pool, mode):
+        missing = {count: n for count, n in deficits(pool, mode).items() if n}
+        if not missing:
+            break
+        if attempt == 0 and not pool and mode == MODE_ALL:
+            target, missing_target = MODE_ALL, None
+        else:
+            count = min(missing, key=lambda n: (attempts[n], -missing[n], n))
+            attempts[count] += 1
+            target = MODE_HOME if count == 0 else MODE_SHOP
+            missing_target = count if count else None
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
             break
 
-        home = sum(
-            not x["missing"]
-            for x in pool
-        )
-
-        shop = sum(
-            bool(x["missing"])
-            for x in pool
-        )
-
-        if mode != MODE_ALL:
-            target = mode
-
-        elif home < 3 and pool:
-            target = MODE_HOME
-
-        elif shop < 2 and pool:
-            target = MODE_SHOP
-
-        else:
-            target = MODE_ALL
-
         try:
-            fresh = await candidates(
+            fresh = await asyncio.wait_for(candidates(
                 basket,
                 history,
                 signatures,
@@ -610,7 +596,8 @@ async def fill(
                 target,
                 time_limit,
                 servings,
-            )
+                missing_target=missing_target,
+            ), timeout=remaining)
 
         except Exception:
             if not pool:
@@ -824,9 +811,9 @@ def validate_full(raw, short, basket, species, servings=2):
             "Əlavə ərzaq sayı ikidən çoxdur."
         )
 
-    if short["missing"] and not missing:
+    if {key(x) for x in short["missing"]} != {key(x) for x in missing}:
         raise ValueError(
-            "İlk siyahıdakı alış-veriş ehtiyacı dəyişib."
+            "Çatışmayan ərzaqlar ilkin siyahı ilə eyni qalmalıdır."
         )
 
     steps = []
@@ -1101,7 +1088,7 @@ async def make_full(short, basket, species=None, servings=2):
         + " dəqiqə.\n"
 
         + ("Bu yemək yalnız evdəki ərzaqlarla seçilib: su xaric səbətdə olmayan heç bir məhsul əlavə etmə.\n"
-           if not short["missing"] else "Çatışmayan məhsulların sayı su xaric ən çox 2 olsun.\n")
+           if not short["missing"] else "Çatışmayan məhsullar yalnız bunlar olsun, adları və sayı dəyişməsin: " + ", ".join(short["missing"]) + ".\n")
 
         + kind +
 
@@ -1224,6 +1211,11 @@ def visible_recipes(view):
             if matches_time(recipe["minutes"], limit)]
 
 
+def display_recipes(view):
+    """One presentation order, retaining stable cache/callback indices."""
+    return sorted(visible_recipes(view), key=lambda pair: len(pair[1]["missing"]))
+
+
 def summary_text(view):
     lines = [
         "🍽️ Nə bişirim?",
@@ -1239,15 +1231,17 @@ def summary_text(view):
     ]
 
     groups = (
-        ("✅ Yalnız evdəkilərlə", False),
-        ("➕ Əlavə 1–2 ərzaqla", True),
+        ("✅ Yalnız evdəkilərlə", 0),
+        ("➕ Əlavə 1 ərzaqla", 1),
+        ("➕ Əlavə 2 ərzaqla", 2),
     )
+    display_number = 0
 
     for header, has_missing in groups:
         group = [
             (i, recipe)
-            for i, recipe in visible_recipes(view)
-            if bool(recipe["missing"]) == has_missing
+            for i, recipe in display_recipes(view)
+            if len(recipe["missing"]) == has_missing
         ]
 
         if not group:
@@ -1256,13 +1250,14 @@ def summary_text(view):
         lines.append(header)
 
         for i, recipe in group:
+            display_number += 1
             lines.append(
-                f"{i + 1}. {recipe['name']} "
+                f"{display_number}. {recipe['name']} "
                 f"— təx. {recipe['minutes']} dəq"
             )
 
             lines.append(
-                f"   Üsul: {recipe['method']}"
+                f"   Üsul: {method_label(recipe['method'])}"
             )
 
             if recipe["missing"]:
@@ -1277,8 +1272,12 @@ def summary_text(view):
         lines.append("Bu səhifədə seçilmiş vaxt aralığına uyğun təklif yoxdur. Digər səhifələrə bax və ya bu vaxta uyğun reseptlər axtar."
                      if time_range(view.get("time_limit", 0)) else
                      "Bu seçimdə uyğun təklif tapılmadı. Başqa təkliflər axtar və ya ərzaq seçimini dəyiş.")
-    if view.get("search_note"):
-        lines.append(view["search_note"])
+    shortfalls = deficits([recipe for _, recipe in display_recipes(view)], view["mode"])
+    if any(shortfalls.values()):
+        labels = {0: "evdəkilərlə", 1: "1 əlavə ərzaqla", 2: "2 əlavə ərzaqla"}
+        lines.append("Bölgünü tamamlamaq üçün çatmır: " + "; ".join(
+            f"{n} resept {labels[count]}" for count, n in shortfalls.items() if n) +
+            ". Bu axtarışda tapılmadı; başqa təkliflər axtara və ya filtri dəyişə bilərsən.")
     lines.append(
         "ℹ️ Vaxt hazırlıq, bişirmə və gözləmə daxil təxminidir. Səbətdə miqdar yoxdur. "
         "Reseptdə yazılan miqdarları evdə yoxla."
@@ -1334,13 +1333,11 @@ def summary_keyboard(view):
         btn(("● " if view.get("servings", 2) == value else "") + f"👥 {value} nəfər", f"recipe:servings:{value}")
         for value in (1, 2, 4)
     ])
-    for i, recipe in visible_recipes(view):
-        rows.append([
-            btn(
-                f"📖 {i + 1}. {recipe['name']}"[:55],
-                f"recipe:open:{i}",
-            )
-        ])
+    for display_number, (i, recipe) in enumerate(display_recipes(view), 1):
+        rows.append([btn(
+            f"{display_number}. {recipe['name']}"[:55],
+            f"recipe:open:{i}",
+        )])
 
     navigation = []
 
@@ -1413,7 +1410,7 @@ def detail_text(recipe, compact_missing=False):
         "",
         f"👥 {r.get('servings', 2)} nəfərlik · miqdarlar təxminidir",
         time_text,
-        "🔥 Üsul: " + r["method"],
+        "🔥 Üsul: " + method_label(r["method"]),
         "",
         "🥬 Lazım olan ərzaqlar:",
     ]
@@ -1575,8 +1572,6 @@ def new_view(
         "empty_runs": 0,
         "time_limit": 0,
         "servings": 2,
-        "search_note": ("Bu şərtlərlə yalnız bu qədər uyğun təklif tapıldı."
-                        if 0 < len(recipes) < PAGE_SIZE else ""),
     }
 
 
@@ -2153,14 +2148,10 @@ async def recipe_click(update, context):
                 )
                 return
 
-            if (
-                view["mode"] == MODE_HOME
-                and full["missing"]
-            ):
+            if {key(x) for x in full["missing"]} != {key(x) for x in recipes[index]["missing"]}:
                 await q.edit_message_text(
-                    "⚠️ Əlavə ərzaq aşkarlandı. "
-                    "Evdəkilərlə rejimində "
-                    "bu resepti göstərmirəm.\n\n"
+                    "⚠️ Tam reseptdə çatışmayan ərzaqlar ilkin seçimə uyğun gəlmədi. "
+                    "Başqa təklif seç və ya yenidən cəhd et.\n\n"
                     + summary_text(view),
                     reply_markup=summary_keyboard(view),
                 )
@@ -2185,6 +2176,10 @@ async def recipe_click(update, context):
             # Gemini-yə yeni sorğu göndərilmir.
             view["details"][cache_key] = full
 
+        if {key(x) for x in full["missing"]} != {key(x) for x in recipes[index]["missing"]}:
+            view["details"].pop(cache_key, None)
+            await edit_query(q, "Saxlanmış reseptin ərzaq bölgüsü dəyişib. Resepti yenidən aç.\n\n" + summary_text(view), summary_keyboard(view))
+            return
         recipes[index]["minutes"] = full["total"]
         if not matches_time(full["total"], view.get("time_limit", 0)):
             await edit_query(q, "Bu porsiya üçün dəqiqləşən vaxt seçilmiş aralığa uyğun deyil.\n\n" + summary_text(view), summary_keyboard(view))
@@ -2291,8 +2286,6 @@ async def recipe_click(update, context):
         return
 
     view["empty_runs"] = 0
-    view["search_note"] = ("Bu şərtlərlə yalnız bu qədər yeni uyğun təklif tapıldı."
-                           if len(recipes) < PAGE_SIZE else "")
 
     view["pages"].append(recipes)
     view["page"] = len(view["pages"]) - 1

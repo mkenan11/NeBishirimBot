@@ -50,5 +50,12 @@ düyməsi var. Yeni axtarışlara vaxt və porsiya ötürülür; başqa aralıqd
 namizədlər itirilmir. Tam reseptin dəqiqləşən vaxtı yenidən yoxlanır.
 Ad və duz/istiot dəyişiklikləri eyni üsul və əsas ərzaqlarla yeni təklif sayılmır.
 Model təlimatları müxtəlif real yeməklər istəyir, keyfiyyətə zəmanət vermir.
+Səhifə bölgüsü: Bütün təkliflər = 3 evdəki + 1 tək əlavə + 1 iki əlavə;
+Yalnız evdəkilərlə = 5 evdəki; Əlavə 1–2 = 3 tək əlavə + 2 iki əlavə.
+Çatışmayan qruplar növbəli hədəflənir: ən çox 4 sorğu və ümumilikdə 120 saniyə.
+Uyğun nəticə çatmırsa başqa qrupdan doldurulmur; çatışmayan say ekranda göstərilir.
+Vaxt filtri cari səhifəni süzdüyü üçün görünən say azala bilər.
+Mətn və düymələr eyni sıralanmış görünüşü istifadə edir; callback indeksləri
+və tam resept keşi dəyişmir. Tam resept ilkin çatışmayan ərzaqları dəyişə bilməz.
 1/2/4 nəfər seçimi tam resept hazırlanmasına ötürülür; vaxt və temperatur
 sadəcə vurulmur. AI modeli bu dəyişikliklə əvəz edilmir.

@@ -120,6 +120,7 @@ class RecipeInteractionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_old_shopping_button_explains_retirement(self):
         self.view["details"][(0, 0)]["missing"] = ["Duz"]
+        self.view["pages"][0][0]["missing"] = ["Duz"]
         await fixtures.FavoritesFlowTests.open_recipe(self)
         self.query.data = "recipe:shop:" + self.state["active_detail"]["token"]
         with patch("shopping_store.add_items") as add:
