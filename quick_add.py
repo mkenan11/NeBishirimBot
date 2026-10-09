@@ -13,28 +13,27 @@ DB_PATH = Path(__file__).resolve().parent / "ingredients.db"
 
 PAGE_SIZE = 10
 
-# 20 hazir erzaq
-STAPLES = (
-    "Duz",
-    "Bitki yağı",
-    "Kərə yağı",
-    "Su",
-    "Şəkər",
-    "Un",
-    "Düyü",
-    "Makaron",
-    "Çörək",
-    "Tomat pastası",
-    "Kartof",
-    "Soğan",
-    "Sarımsaq",
-    "Pomidor",
-    "Kök",
-    "Yumurta",
-    "Süd",
-    "Qatıq",
-    "Pendir",
-    "Qarabaşaq",
+# «Tez əlavə et» kateqoriyaları: Telegram və web eyni siyahını işlədir.
+QUICK_GROUPS = (
+    ("Tərəvəz", ("Kartof", "Soğan", "Sarımsaq", "Pomidor", "Xiyar", "Kök", "Bibər", "Badımcan", "Kələm", "Göbələk")),
+    ("Ət, balıq, yumurta", ("Toyuq", "Mal əti", "Qiymə", "Balıq", "Yumurta", "Kolbasa", "Sosiska")),
+    ("Süd məhsulları", ("Süd", "Qatıq", "Pendir", "Kərə yağı", "Xama", "Kəsmik")),
+    ("Taxıl və paxlalı", ("Düyü", "Makaron", "Un", "Çörək", "Qarabaşaq", "Mərci", "Lobya", "Noxud", "Bulgur", "Lavaş")),
+    ("Əsas və ədviyyat", ("Duz", "Bitki yağı", "Şəkər", "Su", "Tomat pastası", "İstiot", "Zirə", "Cəfəri", "Şüyüd")),
+    ("Meyvə", ("Limon", "Alma", "Banan", "Portağal")),
+)
+
+# Web-də ilk göstərilən ən çox istifadə olunanlar.
+POPULAR = ("Kartof", "Soğan", "Yumurta", "Pomidor", "Toyuq", "Düyü", "Makaron", "Pendir", "Süd", "Çörək")
+
+# İlk 20-nin sırası dəyişmir: Telegram düymələri ərzağı sıra nömrəsi ilə seçir,
+# ona görə köhnə açıq menyular yenə düzgün ərzağı seçir. Yenilər sona əlavə olunur.
+_ORIGINAL = (
+    "Duz", "Bitki yağı", "Kərə yağı", "Su", "Şəkər", "Un", "Düyü", "Makaron", "Çörək", "Tomat pastası",
+    "Kartof", "Soğan", "Sarımsaq", "Pomidor", "Kök", "Yumurta", "Süd", "Qatıq", "Pendir", "Qarabaşaq",
+)
+STAPLES = _ORIGINAL + tuple(
+    name for _, items in QUICK_GROUPS for name in items if name not in _ORIGINAL
 )
 
 
@@ -70,10 +69,7 @@ def quick_view(user_id, selected, page=0):
         start:start + PAGE_SIZE
     ]
 
-    if page == 0:
-        title = "🥫 Əsas ərzaqlar"
-    else:
-        title = "🥔 Digər gündəlik ərzaqlar"
+    title = "🥫 Əsas ərzaqlar" if page == 0 else "🥔 Digər gündəlik ərzaqlar"
 
     text = (
         "⚡ Tez əlavə et\n\n"

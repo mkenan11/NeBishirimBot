@@ -29,7 +29,7 @@ from favorites_store import (
 )
 from ingredient_names import ingredient_key, normalize_name
 from ingredient_parser import parse_ingredients
-from quick_add import STAPLES
+from quick_add import POPULAR, QUICK_GROUPS, STAPLES
 from session_store import load_session, save_session
 
 LOG = logging.getLogger(__name__)
@@ -118,8 +118,14 @@ def pantry_payload(user_id):
     owned = {ingredient_key(row[1]) for row in rows}
     return {
         "items": [{"id": row[0], "name": row[1]} for row in rows],
-        # Telegram-dakı «Tez əlavə et» siyahısı: istifadəçidə hələ olmayan əsas ərzaqlar.
+        # Telegram-dakı «Tez əlavə et» siyahısı: istifadəçidə hələ olmayan ərzaqlar.
         "suggestions": [name for name in STAPLES if ingredient_key(name) not in owned],
+        "popular": [name for name in POPULAR if ingredient_key(name) not in owned],
+        "suggestion_groups": [
+            {"name": group, "items": missing}
+            for group, items in QUICK_GROUPS
+            if (missing := [name for name in items if ingredient_key(name) not in owned])
+        ],
     }
 
 
