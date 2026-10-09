@@ -4,6 +4,7 @@ import json
 import os
 import unittest
 import uuid
+from pathlib import Path
 from unittest.mock import patch
 
 import psycopg
@@ -14,6 +15,7 @@ import favorites_store
 import pantry_store
 import session_store
 import shopping_store
+import web_store
 from migrate import migrate
 
 
@@ -75,7 +77,25 @@ class DatabaseIntegrationTests(unittest.TestCase):
 
     def test_migrations_are_repeatable(self):
         migrate(self.db)
-        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0], 2)
+        expected = len(list((Path(__file__).resolve().parent.parent / "migrations").glob("*.sql")))
+        self.assertEqual(self.db.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0], expected)
+
+    def test_web_sessions_use_negative_ids_hashed_tokens_and_limits(self):
+        token, user_id = web_store.create_web_user()
+        self.assertLess(user_id, 0)
+        self.assertEqual(web_store.resolve_session(token), user_id)
+        self.assertIsNone(web_store.resolve_session("unknown-token"))
+        stored = self.db.execute("SELECT token_hash FROM web_sessions").fetchone()[0]
+        self.assertNotEqual(stored, token)
+        pantry_store.add_ingredients(user_id, ["Kartof"])
+        self.assertEqual([row[1] for row in pantry_store.list_rows(user_id)], ["Kartof"])
+        self.assertTrue(web_store.hit("user:test:search", 2))
+        self.assertTrue(web_store.hit("user:test:search", 2))
+        self.assertFalse(web_store.hit("user:test:search", 2))
+        account_data.delete_account(user_id)
+        web_store.delete_web_sessions(user_id)
+        self.assertIsNone(web_store.resolve_session(token))
+        self.assertEqual(pantry_store.list_rows(user_id), [])
 
     def test_pantry_recognizes_legacy_spelling_without_deleting_it(self):
         self.db.execute("INSERT INTO users VALUES (1)")

@@ -69,7 +69,7 @@ def hit(bucket, limit, window_seconds=3600):
     with _connect() as db:
         hits = db.execute(
             """INSERT INTO web_rate_limits (bucket, window_start, hits)
-               VALUES (%s, to_timestamp(floor(extract(epoch FROM NOW()) / %s) * %s), 1)
+               VALUES (%s, to_timestamp((floor(extract(epoch FROM NOW()) / %s) * %s)::float8), 1)
                ON CONFLICT (bucket, window_start) DO UPDATE SET hits = web_rate_limits.hits + 1
                RETURNING hits""",
             (bucket, window_seconds, window_seconds),
