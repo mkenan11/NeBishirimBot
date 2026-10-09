@@ -92,6 +92,8 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(body["added"], ["Kartof"])
         self.assertEqual(body["unknown"], ["Zəfəran tozu"])
         self.assertEqual([item["name"] for item in body["items"]], ["Kartof", "Soğan"])
+        self.assertNotIn("Kartof", body["suggestions"])
+        self.assertIn("Duz", body["suggestions"])
 
     def test_search_open_and_save_use_shared_core(self):
         page = [short("A"), short("B"), short("C"), short("D", ["Duz"]), short("E", ["Duz", "Qatıq"])]

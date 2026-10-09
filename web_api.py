@@ -27,8 +27,9 @@ from favorites_store import (
     list_favorites,
     save_favorite,
 )
-from ingredient_names import normalize_name
+from ingredient_names import ingredient_key, normalize_name
 from ingredient_parser import parse_ingredients
+from quick_add import STAPLES
 from session_store import load_session, save_session
 
 LOG = logging.getLogger(__name__)
@@ -113,7 +114,13 @@ async def delete_my_account(user=Depends(current_user)):
 # ============================================================
 
 def pantry_payload(user_id):
-    return {"items": [{"id": row[0], "name": row[1]} for row in pantry_store.list_rows(user_id)]}
+    rows = pantry_store.list_rows(user_id)
+    owned = {ingredient_key(row[1]) for row in rows}
+    return {
+        "items": [{"id": row[0], "name": row[1]} for row in rows],
+        # Telegram-dakı «Tez əlavə et» siyahısı: istifadəçidə hələ olmayan əsas ərzaqlar.
+        "suggestions": [name for name in STAPLES if ingredient_key(name) not in owned],
+    }
 
 
 class TextIn(BaseModel):
