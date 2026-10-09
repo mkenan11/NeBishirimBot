@@ -112,6 +112,9 @@ TELEGRAM_WEBHOOK_SECRET=your_webhook_secret
 QSTASH_TOKEN=your_qstash_token
 QSTASH_CURRENT_SIGNING_KEY=your_current_signing_key
 QSTASH_NEXT_SIGNING_KEY=your_next_signing_key
+
+# Web app API (/web/v1). Optional: without it the web API answers 503 and Telegram keeps working.
+INTERNAL_WEB_API_SECRET=at_least_32_random_characters
 ```
 
 For database integration tests, you can also use:
@@ -121,6 +124,20 @@ TEST_DATABASE_URL=your_test_postgresql_database_url
 ```
 
 > Never commit your `.env` file, API keys, bot tokens, database passwords, or webhook secrets to GitHub.
+
+---
+
+## 🌐 Web App API
+
+The website's web app uses the same core as the Telegram bot through a private API mounted at `/web/v1` (`web_api.py`).
+
+* Shared core modules: `recipe_session.py` (search, modes, filters, pages, full recipe), `pantry_store.py` (ingredient writes), `ingredient_parser.py` (text parsing), `ai_features.recognize_photo`, `favorites_store.py`.
+* Telegram handlers are thin adapters over the same functions, so behavior stays identical.
+* Only the website's server calls this API, with `Authorization: Bearer $INTERNAL_WEB_API_SECRET`. Browsers never see the secret.
+* Web users are anonymous. Each one gets a negative `user_id` (Telegram IDs are positive), which lets the existing `ingredients`, `favorite_recipes` and `bot_sessions` tables be shared without schema changes. Sessions are stored as token hashes in `web_sessions`.
+* AI calls from the web are rate-limited per session and per hashed IP (`web_rate_limits`).
+
+Before deploying, apply `migrations/003_web_access.sql` with `python -B migrate.py`.
 
 ---
 

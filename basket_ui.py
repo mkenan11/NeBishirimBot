@@ -1,25 +1,15 @@
-import re
-import database as sqlite3
-from pathlib import Path
-
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from command_controls import clear_pending_operations
-from ingredient_names import normalize_name, ingredient_key
+import pantry_store
 
-DB_PATH = Path(__file__).resolve().parent / "ingredients.db"
 PAGE_SIZE = 10
 
 
 def get_rows(user_id):
-    with sqlite3.connect(DB_PATH) as db:
-        return db.execute(
-            """SELECT id, name, normalized_name FROM ingredients
-               WHERE user_id = ? ORDER BY id""", (user_id,)
-        ).fetchall()
+    return pantry_store.list_rows(user_id)
 
 
-def snapshot(rows):
-    return tuple(tuple(row) for row in rows)
+snapshot = pantry_store.snapshot
 
 
 def page_number(page, total):
@@ -151,57 +141,30 @@ async def handle_rename_text(update, context):
     if state is None:
         return
     user_id = update.effective_user.id
-    original = update.message.text
-    new_name = " ".join(original.split())
-    if (
-        not new_name or len(new_name) > 50
-        or "," in new_name or ";" in new_name or "\n" in original
-        or re.search(r"\d", new_name)
-        or re.search(r"\b(evdə|evde|var|yoxdur|yoxdu|bitib|qalmayıb)\b", new_name, re.I)
-        or not re.fullmatch(r"[^\W\d_]+(?:[ -][^\W\d_]+)*", new_name, re.UNICODE)
-    ):
+    new_name, problem = pantry_store.parse_single_name(update.message.text)
+    if problem == "format":
         await update.message.reply_text(
             "❌ Yalnız bir ərzağın adını yaz.\nMəsələn: Qırmızı soğan\n"
             "Başqa ad yaz və ya «Ləğv et» düyməsinə bas."
         )
         return
-
-    new_name = normalize_name(new_name)
-    if new_name is None:
+    if problem == "name":
         await update.message.reply_text("Ərzaq adını yenidən yaz.")
         return
-    normalized = new_name.casefold()
-    changed = False
-    with sqlite3.connect(DB_PATH) as db:
-        db.execute("BEGIN IMMEDIATE")
-        current = db.execute(
-            """SELECT name, normalized_name FROM ingredients
-               WHERE id = ? AND user_id = ?""", (state["id"], user_id)
-        ).fetchone()
-        if current is None or tuple(current) != (state["name"], state["normalized"]):
-            db.rollback()
-            context.user_data.pop("rename_target", None)
-            await update.message.reply_text("Siyahı dəyişib. Ad dəyişməni yenidən başlat.")
-            await show_basket(update, context)
-            return
-        duplicate = any(
-            item_id != state["id"] and ingredient_key(name) == ingredient_key(new_name)
-            for item_id, name in db.execute(
-                "SELECT id, name FROM ingredients WHERE user_id = ?", (user_id,),
-            ).fetchall()
+    try:
+        changed = pantry_store.rename_ingredient(
+            user_id, state["id"], new_name, expected=(state["name"], state["normalized"]),
         )
-        if duplicate:
-            db.rollback()
-            await update.message.reply_text(
-                f"ℹ️ «{new_name}» artıq siyahındadır. Başqa ad yaz və ya ləğv et."
-            )
-            return
-        db.execute(
-            """UPDATE ingredients SET name = ?, normalized_name = ?
-               WHERE id = ? AND user_id = ?""",
-            (new_name, normalized, state["id"], user_id),
+    except pantry_store.PantryChanged:
+        context.user_data.pop("rename_target", None)
+        await update.message.reply_text("Siyahı dəyişib. Ad dəyişməni yenidən başlat.")
+        await show_basket(update, context)
+        return
+    except pantry_store.DuplicateName:
+        await update.message.reply_text(
+            f"ℹ️ «{new_name}» artıq siyahındadır. Başqa ad yaz və ya ləğv et."
         )
-        changed = new_name != state["name"]
+        return
 
     context.user_data.pop("rename_target", None)
     if changed:
@@ -309,18 +272,10 @@ async def basket_click(update, context):
         if state is None:
             text, keyboard = basket_view(user_id)
         else:
-            with sqlite3.connect(DB_PATH) as db:
-                db.execute("BEGIN IMMEDIATE")
-                current = db.execute(
-                    """SELECT id, name, normalized_name FROM ingredients
-                       WHERE user_id = ? ORDER BY id""", (user_id,)
-                ).fetchall()
-                if not current or snapshot(current) != state["snapshot"]:
-                    db.rollback()
-                    removed = None
-                else:
-                    db.execute("DELETE FROM ingredients WHERE user_id = ?", (user_id,))
-                    removed = current
+            try:
+                removed = pantry_store.clear_ingredients(user_id, state["snapshot"])
+            except pantry_store.PantryChanged:
+                removed = None
             if removed is None:
                 text = "Siyahı dəyişib. Hamısını sil əməliyyatını yenidən başlat."
                 keyboard = InlineKeyboardMarkup([
@@ -338,22 +293,7 @@ async def basket_click(update, context):
         if not undo:
             text, keyboard = basket_view(user_id)
         else:
-            with sqlite3.connect(DB_PATH) as db:
-                db.execute("BEGIN IMMEDIATE")
-                current = db.execute(
-                    """SELECT id, name, normalized_name FROM ingredients
-                       WHERE user_id = ? ORDER BY id""", (user_id,)
-                ).fetchall()
-                if snapshot(current) != undo["after"]:
-                    db.rollback()
-                    restored = False
-                else:
-                    for item_id, name, normalized in undo["removed"]:
-                        db.execute(
-                            """INSERT INTO ingredients (id, user_id, name, normalized_name)
-                               VALUES (?, ?, ?, ?)""", (item_id, user_id, name, normalized)
-                        )
-                    restored = True
+            restored = pantry_store.restore_ingredients(user_id, undo["removed"], undo["after"])
             context.user_data.pop("undo", None)
             text, keyboard = basket_view(user_id)
             if not restored:
@@ -402,22 +342,10 @@ async def basket_click(update, context):
             if not state["confirm"] or not state["selected"]:
                 text, keyboard = delete_view(user_id, state)
             else:
-                with sqlite3.connect(DB_PATH) as db:
-                    db.execute("BEGIN IMMEDIATE")
-                    current = db.execute(
-                        """SELECT id, name, normalized_name FROM ingredients
-                           WHERE user_id = ? ORDER BY id""", (user_id,)
-                    ).fetchall()
-                    if snapshot(current) != state["snapshot"]:
-                        db.rollback()
-                        removed = None
-                    else:
-                        removed = [row for row in current if row[0] in state["selected"]]
-                        for item_id, _, _ in removed:
-                            db.execute(
-                                "DELETE FROM ingredients WHERE user_id = ? AND id = ?",
-                                (user_id, item_id),
-                            )
+                try:
+                    removed = pantry_store.delete_ingredients(user_id, state["selected"], state["snapshot"])
+                except pantry_store.PantryChanged:
+                    removed = None
                 context.user_data.pop("delete_state", None)
                 if removed is None:
                     text, keyboard = basket_view(user_id)

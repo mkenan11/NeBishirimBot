@@ -65,3 +65,17 @@ Mətn və düymələr eyni sıralanmış görünüşü istifadə edir; callback 
 və tam resept keşi dəyişmir. Tam resept ilkin çatışmayan ərzaqları dəyişə bilməz.
 1/2/4 nəfər seçimi tam resept hazırlanmasına ötürülür; vaxt və temperatur
 sadəcə vurulmur. AI modeli bu dəyişikliklə əvəz edilmir.
+
+## Web interfeysi
+
+`003_web_access.sql` web versiyası üçün `web_user_seq`, `web_sessions` və
+`web_rate_limits` cədvəllərini əlavə edir; mövcud cədvəllər dəyişmir. Web
+istifadəçiləri mənfi `user_id` alır (Telegram ID-ləri müsbətdir), ona görə
+ərzaqlar, seçilmişlər və sessiya eyni cədvəllərdə saxlanır. `web_sessions`-da
+token-in özü deyil, SHA-256 hash-i saxlanır. Web-dən «məlumatlarımı sil» mövcud
+`delete_account` funksiyasını çağırır, sonra həmin istifadəçinin web
+sessiyalarını silir. Limit cədvəlində IP açarla hash-lənir; köhnə pəncərələr
+iki gündən sonra təsadüfi olaraq təmizlənir.
+
+Web API kodu bu miqrasiyadan əvvəl deploy olunsa, Telegram axını təsirlənmir;
+yalnız web sorğuları xəta verir. Buna baxmayaraq, əvvəlcə miqrasiyanı tətbiq et.

@@ -25,6 +25,15 @@ app = FastAPI(
     openapi_url=None,
 )
 
+# Web interfeysi (/web/v1). Yüklənməsə belə Telegram webhook-u və worker işləməyə davam edir.
+try:
+    import web_api
+except Exception:
+    LOG.exception("Web API could not be loaded")
+else:
+    app.include_router(web_api.router)
+    app.add_exception_handler(web_api.ApiError, web_api.api_error_handler)
+
 QSTASH_API = "https://qstash-eu-central-1.upstash.io"
 QUEUE_NAME = "ne-bishirim"
 MAX_UPDATE_BYTES = 1024 * 1024

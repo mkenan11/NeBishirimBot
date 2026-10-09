@@ -16,6 +16,7 @@ from favorites_store import is_favorite, save_favorite
 from command_controls import clear_pending_operations
 from ingredient_names import ingredient_key, normalize_name
 from ui_utils import edit_query
+import recipe_session
 
 
 LOG = logging.getLogger(__name__)
@@ -1615,64 +1616,26 @@ async def recipe_start(update, context):
         status.message_id
     )
     # Choices apply within a search; every new search starts from these defaults.
-    preferences = {"time_limit": 0, "servings": 2}
-    context.user_data["recipe_preferences"] = preferences
+    context.user_data["recipe_preferences"] = dict(recipe_session.DEFAULT_PREFERENCES)
 
     try:
-        (
-            recipes,
-            pool,
-            history,
-            signatures,
-        ) = await fill(
-            [
-                row[1]
-                for row in basket_rows
-            ],
-            [],
-            set(),
-            set(),
-            0,
-            MODE_ALL,
-            time_range(preferences.get("time_limit", 0)),
-            preferences.get("servings", 2),
-        )
-
-    except Exception as error:
-        view = new_view(MODE_ALL, [], [], set(), set())
-        view.update(preferences)
-        context.user_data["recipe_state"] = {"basket": basket_rows, "mode": MODE_ALL,
-                                              "views": {MODE_ALL: view}}
+        state = await recipe_session.start(basket_rows, lambda: get_rows(user_id))
+    except recipe_session.SearchFailed as failure:
+        context.user_data["recipe_state"] = failure.state
         await status.edit_text(
             "❌ Resept axtarışı alınmadı. "
-            + api_error_message(error),
-            reply_markup=summary_keyboard(view),
+            + api_error_message(failure.error),
+            reply_markup=summary_keyboard(recipe_session.current_view(failure.state)),
         )
         return
-
-    if tuple(get_rows(user_id)) != basket_rows:
+    except recipe_session.BasketChanged:
         await status.edit_text(
             "Səbət dəyişib. Yenidən «Nə bişirim?» seç."
         )
         return
 
-    view = new_view(
-        MODE_ALL,
-        recipes,
-        pool,
-        history,
-        signatures,
-    )
-
-    view.update(context.user_data.get("recipe_preferences", {}))
-
-    context.user_data["recipe_state"] = {
-        "basket": basket_rows,
-        "mode": MODE_ALL,
-        "views": {
-            MODE_ALL: view,
-        },
-    }
+    context.user_data["recipe_state"] = state
+    view = recipe_session.current_view(state)
 
     await status.edit_text(
         summary_text(view),
@@ -1683,6 +1646,24 @@ async def recipe_start(update, context):
 # ============================================================
 # RESEPT DÜYMƏLƏRİ
 # ============================================================
+
+MEAT_KEYBOARD = InlineKeyboardMarkup([
+    [btn("🐄 Mal əti", "recipe:meat:beef")],
+    [btn("🐑 Qoyun əti", "recipe:meat:lamb")],
+    [btn("❔ Bilmirəm", "recipe:meat:unknown")],
+    [btn("⬅️ Reseptlər", "recipe:back")],
+])
+
+REJECTED_TEXT = {
+    "invalid": "⚠️ Bu AI resepti yoxlamadan keçmədi. Başqa yemək seçə bilərsən.\n\n",
+    "missing_changed": (
+        "⚠️ Tam reseptdə çatışmayan ərzaqlar ilkin seçimə uyğun gəlmədi. "
+        "Başqa təklif seç və ya yenidən cəhd et.\n\n"
+    ),
+    "cached_missing_changed": "Saxlanmış reseptin ərzaq bölgüsü dəyişib. Resepti yenidən aç.\n\n",
+    "time_mismatch": "Bu porsiya üçün dəqiqləşən vaxt seçilmiş aralığa uyğun deyil.\n\n",
+}
+
 
 async def recipe_click(update, context):
     q = update.callback_query
@@ -1700,7 +1681,6 @@ async def recipe_click(update, context):
         return
 
     parts = q.data.split(":")
-
     action = (
         parts[1]
         if len(parts) > 1
@@ -1736,7 +1716,6 @@ async def recipe_click(update, context):
             text,
             reply_markup=keyboard,
         )
-
         return
 
     state = context.user_data.get(
@@ -1751,8 +1730,12 @@ async def recipe_click(update, context):
         )
         return
 
+    def rows_now():
+        # recipes.get_rows testlərdə patch olunur, ona görə burada çağırılır.
+        return get_rows(user_id)
+
     if (
-        tuple(get_rows(user_id))
+        tuple(rows_now())
         != state["basket"]
     ):
         if action == "save":
@@ -1768,9 +1751,7 @@ async def recipe_click(update, context):
         )
         return
 
-    view = state["views"][
-        state["mode"]
-    ]
+    view = recipe_session.current_view(state)
 
     if action == "save":
         active = state.get("active_detail")
@@ -1814,6 +1795,7 @@ async def recipe_click(update, context):
             # Telegram dəyişib, sessiya yazılmayıbsa retry eyni düyməni göstərə bilər.
             if "message is not modified" not in str(error).lower():
                 raise
+
         active["saved"] = True
         return
 
@@ -1821,20 +1803,13 @@ async def recipe_click(update, context):
     state.pop("active_detail", None)
 
     if action in ("time", "servings"):
-        allowed = (0, 30, 45, 60, 90) if action == "time" else (1, 2, 4)
-        if len(parts) != 3 or not parts[2].isdigit() or int(parts[2]) not in allowed:
+        if len(parts) != 3 or not parts[2].isdigit():
             return
         setting = "time_limit" if action == "time" else "servings"
-        value = int(parts[2])
-        if action == "time":
-            value = time_range(value)
-        for other_view in state["views"].values():
-            other_view[setting] = value
-            other_view["exhausted"] = False
-            other_view["empty_runs"] = 0
-            other_view.pop("search_note", None)
+        value = recipe_session.set_preference(state, setting, int(parts[2]))
+        if value is None:
+            return
         context.user_data.setdefault("recipe_preferences", {})[setting] = value
-        state.pop("pending_meat", None)
         await edit_query(q, summary_text(view), summary_keyboard(view))
         return
 
@@ -1852,78 +1827,35 @@ async def recipe_click(update, context):
 
         mode = parts[2]
 
-        if mode in state["views"]:
-            state["mode"] = mode
-
-            cached = state["views"][mode]
-
+        if mode not in state["views"]:
             await q.edit_message_text(
-                summary_text(cached),
-                reply_markup=summary_keyboard(cached),
+                "🔍 Seçiminə uyğun reseptlər axtarılır..."
             )
-            return
-
-        await q.edit_message_text(
-            "🔍 Seçiminə uyğun reseptlər axtarılır..."
-        )
 
         try:
-            (
-                recipes,
-                pool,
-                history,
-                signatures,
-            ) = await fill(
-                [
-                    row[1]
-                    for row in state["basket"]
-                ],
-                [],
-                set(),
-                set(),
-                0,
-                mode,
-                time_range(view.get("time_limit", 0)),
-                view.get("servings", 2),
+            await recipe_session.switch_mode(
+                state, mode, rows_now, context.user_data.get("recipe_preferences", {}),
             )
-
-        except Exception as error:
+        except recipe_session.SearchFailed as failure:
             await q.edit_message_text(
                 "❌ Axtarış alınmadı. "
-                + api_error_message(error)
+                + api_error_message(failure.error)
                 + "\n\n"
                 + summary_text(view),
                 reply_markup=summary_keyboard(view),
             )
             return
-
-        if (
-            tuple(get_rows(user_id))
-            != state["basket"]
-        ):
+        except recipe_session.BasketChanged:
             context.user_data.pop(
                 "recipe_state",
                 None,
             )
-
             await q.edit_message_text(
                 "Səbət dəyişib. Yenidən axtar."
             )
             return
 
-        state["views"][mode] = new_view(
-            mode,
-            recipes,
-            pool,
-            history,
-            signatures,
-        )
-
-        state["mode"] = mode
-
-        chosen = state["views"][mode]
-        chosen.update(context.user_data.get("recipe_preferences", {}))
-
+        chosen = recipe_session.current_view(state)
         await q.edit_message_text(
             summary_text(chosen),
             reply_markup=summary_keyboard(chosen),
@@ -1951,12 +1883,7 @@ async def recipe_click(update, context):
     # --------------------------------------------------------
 
     if action in ("prev", "next"):
-        page = view["page"] + (
-            -1 if action == "prev" else 1
-        )
-
-        if 0 <= page < len(view["pages"]):
-            view["page"] = page
+        recipe_session.turn_page(state, -1 if action == "prev" else 1)
 
         await q.edit_message_text(
             summary_text(view),
@@ -2025,11 +1952,7 @@ async def recipe_click(update, context):
                 return
 
             index = pending[2]
-
-            species = {
-                "beef": "Mal əti",
-                "lamb": "Qoyun əti",
-            }[parts[2]]
+            species = recipe_session.MEAT_SPECIES[parts[2]]
 
             state.pop(
                 "pending_meat",
@@ -2043,139 +1966,48 @@ async def recipe_click(update, context):
         if not 0 <= index < len(recipes):
             return
 
-        servings = view.get("servings", 2)
-        cache_key = (view["page"], index) if servings == 2 else (view["page"], index, servings)
-
-        full = view["details"].get(
-            cache_key
-        )
-
-        if full is None:
-            if (
-                meat_choice(recipes[index])
-                and not species
-            ):
-                state["pending_meat"] = (
-                    state["mode"],
-                    view["page"],
-                    index,
-                )
-
-                await q.edit_message_text(
-                    "🥩 Səbətdəki «Ət» hansı növdür?",
-                    reply_markup=InlineKeyboardMarkup([
-                        [
-                            btn(
-                                "🐄 Mal əti",
-                                "recipe:meat:beef",
-                            )
-                        ],
-                        [
-                            btn(
-                                "🐑 Qoyun əti",
-                                "recipe:meat:lamb",
-                            )
-                        ],
-                        [
-                            btn(
-                                "❔ Bilmirəm",
-                                "recipe:meat:unknown",
-                            )
-                        ],
-                        [
-                            btn(
-                                "⬅️ Reseptlər",
-                                "recipe:back",
-                            )
-                        ],
-                    ]),
-                )
-                return
-
+        if recipe_session.cached_detail(state, index) is None and not (
+            meat_choice(recipes[index]) and not species
+        ):
             await q.edit_message_text(
                 "👨‍🍳 Ətraflı resept hazırlanır..."
             )
 
-            try:
-                full = await make_full(
-                    recipes[index],
-                    [
-                        row[1]
-                        for row in state["basket"]
-                    ],
-                    species,
-                    servings,
-                )
-
-            except ValueError:
-                await q.edit_message_text(
-                    "⚠️ Bu AI resepti yoxlamadan keçmədi. "
-                    "Başqa yemək seçə bilərsən.\n\n"
-                    + summary_text(view),
-                    reply_markup=summary_keyboard(view),
-                )
-                return
-
-            except Exception as error:
-                await q.edit_message_text(
-                    "❌ Resept açıla bilmədi. "
-                    + api_error_message(error)
-                    + "\n\n"
-                    + summary_text(view),
-                    reply_markup=summary_keyboard(view),
-                )
-                return
-
-            if (
-                tuple(get_rows(user_id))
-                != state["basket"]
-            ):
-                context.user_data.pop(
-                    "recipe_state",
-                    None,
-                )
-
-                await q.edit_message_text(
-                    "Səbət dəyişib. Yenidən axtar."
-                )
-                return
-
-            if {key(x) for x in full["missing"]} != {key(x) for x in recipes[index]["missing"]}:
-                await q.edit_message_text(
-                    "⚠️ Tam reseptdə çatışmayan ərzaqlar ilkin seçimə uyğun gəlmədi. "
-                    "Başqa təklif seç və ya yenidən cəhd et.\n\n"
-                    + summary_text(view),
-                    reply_markup=summary_keyboard(view),
-                )
-                return
-
-            # Tam reseptdə dəqiqləşən ərzaqları
-            # və vaxtı qısa siyahıya da yaz.
-            recipes[index]["ingredients"] = [
-                item["name"]
-                for item in full["ingredients"]
-            ]
-
-            recipes[index]["missing"] = (
-                full["missing"]
+        try:
+            full, cache_key = await recipe_session.open_recipe(state, index, rows_now, species)
+        except recipe_session.MeatChoiceRequired:
+            await q.edit_message_text(
+                "🥩 Səbətdəki «Ət» hansı növdür?",
+                reply_markup=MEAT_KEYBOARD,
+            )
+            return
+        except recipe_session.RecipeRejected as rejected:
+            text = REJECTED_TEXT[rejected.reason] + summary_text(view)
+            if rejected.reason in ("cached_missing_changed", "time_mismatch"):
+                await edit_query(q, text, summary_keyboard(view))
+            else:
+                await q.edit_message_text(text, reply_markup=summary_keyboard(view))
+            return
+        except recipe_session.SearchFailed as failure:
+            await q.edit_message_text(
+                "❌ Resept açıla bilmədi. "
+                + api_error_message(failure.error)
+                + "\n\n"
+                + summary_text(view),
+                reply_markup=summary_keyboard(view),
+            )
+            return
+        except recipe_session.BasketChanged:
+            context.user_data.pop(
+                "recipe_state",
+                None,
             )
 
-            recipes[index]["minutes"] = (
-                full["total"]
+            await q.edit_message_text(
+                "Səbət dəyişib. Yenidən axtar."
             )
-
-            # Eyni resept təkrar açılanda
-            # Gemini-yə yeni sorğu göndərilmir.
-            view["details"][cache_key] = full
-
-        if {key(x) for x in full["missing"]} != {key(x) for x in recipes[index]["missing"]}:
-            view["details"].pop(cache_key, None)
-            await edit_query(q, "Saxlanmış reseptin ərzaq bölgüsü dəyişib. Resepti yenidən aç.\n\n" + summary_text(view), summary_keyboard(view))
             return
-        recipes[index]["minutes"] = full["total"]
-        if not matches_time(full["total"], view.get("time_limit", 0)):
-            await edit_query(q, "Bu porsiya üçün dəqiqləşən vaxt seçilmiş aralığa uyğun deyil.\n\n" + summary_text(view), summary_keyboard(view))
-            return
+
         save_token = secrets.token_hex(8)
         try:
             saved = await asyncio.to_thread(is_favorite, user_id, full)
@@ -2200,20 +2032,7 @@ async def recipe_click(update, context):
     # BAŞQA RESEPTLƏR
     # --------------------------------------------------------
 
-    if (
-        action not in ("more", "findtime", "complete")
-        or (action == "more" and (view["exhausted"] or view["page"] != len(view["pages"]) - 1))
-    ):
-        return
-
-    if action == "findtime" and (visible_recipes(view) or not time_range(view.get("time_limit", 0))):
-        return
-
-    if action != "complete" and len(view["pages"]) >= MAX_PAGES:
-        return
-
-    slots = deficits(view["pages"][view["page"]], view["mode"]) if action == "complete" else None
-    if slots is not None and not any(slots.values()):
+    if not recipe_session.can_search(view, action):
         return
 
     await q.edit_message_text(
@@ -2221,40 +2040,17 @@ async def recipe_click(update, context):
     )
 
     try:
-        (
-            recipes,
-            pool,
-            history,
-            signatures,
-        ) = await fill(
-            [
-                row[1]
-                for row in state["basket"]
-            ],
-            view["pool"],
-            view["history"],
-            view["signatures"],
-            len(view["pages"]),
-            view["mode"],
-            time_range(view.get("time_limit", 0)),
-            view.get("servings", 2),
-            **({"slots": slots} if slots is not None else {}),
-        )
-
-    except Exception as error:
+        result = await recipe_session.search_more(state, action, rows_now)
+    except recipe_session.SearchFailed as failure:
         await q.edit_message_text(
             "❌ Axtarış alınmadı. "
-            + api_error_message(error)
+            + api_error_message(failure.error)
             + "\n\n"
             + summary_text(view),
             reply_markup=summary_keyboard(view),
         )
         return
-
-    if (
-        tuple(get_rows(user_id))
-        != state["basket"]
-    ):
+    except recipe_session.BasketChanged:
         context.user_data.pop(
             "recipe_state",
             None,
@@ -2265,29 +2061,13 @@ async def recipe_click(update, context):
         )
         return
 
-    view["pool"] = pool
-    view["history"] = history
-    view["signatures"] = signatures
-    if not recipes:
-        view["empty_runs"] += 1
-
-        view["exhausted"] = False
-
+    if result == "empty":
         await q.edit_message_text(
             "Bu cəhddə şərtlərə uyğun 5 yeni resept tamamlanmadı. Əvvəlki siyahı saxlanılıb; yenidən cəhd edə bilərsən.\n\n"
             + summary_text(view),
             reply_markup=summary_keyboard(view),
         )
         return
-
-    view["empty_runs"] = 0
-
-    if action == "complete":
-        # Append only: existing detail-cache and callback indices stay valid.
-        view["pages"][view["page"]].extend(recipes)
-    else:
-        view["pages"].append(recipes)
-        view["page"] = len(view["pages"]) - 1
 
     await q.edit_message_text(
         summary_text(view),

@@ -313,6 +313,47 @@ def photo_view(state):
     )
 
 
+PHOTO_INSTRUCTION = (
+    "Sən ərzaq tanıma köməkçisisən. "
+    "Fotoda aydın görünən ərzaqları "
+    "Azərbaycan dilində adlandır. "
+    "Yalnız vizual olaraq görünən "
+    "ərzaqları qaytar. "
+    "Pulqabı, telefon, qab və insan kimi "
+    "ərzaq olmayan obyektləri daxil etmə. "
+    "Bağlı qablaşdırmanın içini təxmin etmə. "
+    "Üzərində məhsulun adı aydın yazılıbsa "
+    "ondan istifadə edə bilərsən. "
+    "Eyni ərzağı yalnız bir dəfə göstər. "
+    "Miqdar və brend yazma. "
+    "Əmin olmadığın məhsulu siyahıya salma. "
+    "Ərzaq yoxdursa status no_food seç. "
+    "Şəkil çox bulanıq və anlaşılmazdırsa "
+    "status unclear seç. "
+    "Ən çox 20 ərzaq qaytar."
+)
+
+
+async def recognize_photo(image_bytes, mime_type="image/jpeg"):
+    """Şəkildəki ərzaqları tanıyır. Qaytarır: (status, names).
+
+    status: "ok" | "no_food" | "unclear". Telegram və web eyni funksiyanı işlədir.
+    """
+    result = await ask_gemini(
+        [
+            PHOTO_INSTRUCTION,
+            types.Part.from_bytes(
+                data=image_bytes,
+                mime_type=mime_type,
+            ),
+        ],
+        PhotoResult,
+    )
+    if result.status != "ok":
+        return result.status, []
+    return "ok", unique_names(result.ingredients, MAX_PHOTO_ITEMS)
+
+
 async def handle_photo(update, context):
     clear_pending_operations(context)
 
@@ -346,36 +387,7 @@ async def handle_photo(update, context):
             )
             return
 
-        instruction = (
-            "Sən ərzaq tanıma köməkçisisən. "
-            "Fotoda aydın görünən ərzaqları "
-            "Azərbaycan dilində adlandır. "
-            "Yalnız vizual olaraq görünən "
-            "ərzaqları qaytar. "
-            "Pulqabı, telefon, qab və insan kimi "
-            "ərzaq olmayan obyektləri daxil etmə. "
-            "Bağlı qablaşdırmanın içini təxmin etmə. "
-            "Üzərində məhsulun adı aydın yazılıbsa "
-            "ondan istifadə edə bilərsən. "
-            "Eyni ərzağı yalnız bir dəfə göstər. "
-            "Miqdar və brend yazma. "
-            "Əmin olmadığın məhsulu siyahıya salma. "
-            "Ərzaq yoxdursa status no_food seç. "
-            "Şəkil çox bulanıq və anlaşılmazdırsa "
-            "status unclear seç. "
-            "Ən çox 20 ərzaq qaytar."
-        )
-
-        result = await ask_gemini(
-            [
-                instruction,
-                types.Part.from_bytes(
-                    data=image_bytes,
-                    mime_type="image/jpeg",
-                ),
-            ],
-            PhotoResult,
-        )
+        result, names = await recognize_photo(image_bytes)
 
     except Exception as error:
         await status.edit_text(
@@ -384,24 +396,19 @@ async def handle_photo(update, context):
         )
         return
 
-    if result.status == "no_food":
+    if result == "no_food":
         await status.edit_text(
             "📸 Bu şəkildə ərzaq müəyyən edə bilmədim.\n\n"
             "Ərzaqların şəklini göndər."
         )
         return
 
-    if result.status == "unclear":
+    if result == "unclear":
         await status.edit_text(
             "📸 Şəkil kifayət qədər aydın deyil.\n\n"
             "Daha işıqlı və aydın foto göndər."
         )
         return
-
-    names = unique_names(
-        result.ingredients,
-        MAX_PHOTO_ITEMS,
-    )
 
     if not names:
         await status.edit_text(
