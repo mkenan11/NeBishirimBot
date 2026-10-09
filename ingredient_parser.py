@@ -6,7 +6,7 @@ from ingredient_names import fold, ingredient_key, normalize_name, split_ingredi
 from quick_add import STAPLES
 
 # Tanınan ərzaqlar: bunlar təsdiqsiz əlavə olunur və yazılış düzəlişi üçün lüğətdir.
-VOCABULARY = tuple(STAPLES) + (
+VOCABULARY = tuple(dict.fromkeys(tuple(STAPLES) + (
     "Toyuq", "Toyuq filesi", "Mal əti", "Qoyun əti",
     "Ət", "Balıq", "Qiymə", "Kolbasa", "Sosiska",
     "Noxud", "Lobya", "Mərci", "Yaşıl noxud",
@@ -38,7 +38,7 @@ VOCABULARY = tuple(STAPLES) + (
     "Xəmir", "Yufka", "Maya", "Soda", "Qabartma tozu", "Kakao", "Şokolad",
     "Çay", "Qəhvə", "Şəkər tozu", "Ayran", "Brınza",
     "Motal pendiri", "Suluguni", "Krem pendir", "Qatılaşdırılmış süd",
-)
+)))
 
 KNOWN = {ingredient_key(name) for name in VOCABULARY}
 

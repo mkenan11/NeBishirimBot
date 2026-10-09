@@ -2,7 +2,9 @@
 
 import unittest
 
-from ingredient_parser import NAMES_BY_PLAIN, VOCABULARY, WORDS_BY_PLAIN, looks_like_word, parse_ingredients
+from ingredient_names import ingredient_key
+from ingredient_parser import KNOWN, NAMES_BY_PLAIN, VOCABULARY, WORDS_BY_PLAIN, looks_like_word, parse_ingredients
+from quick_add import POPULAR, QUICK_GROUPS, STAPLES
 
 
 class SpellingTests(unittest.TestCase):
@@ -42,6 +44,21 @@ class SpellingTests(unittest.TestCase):
         self.assertNotIn(None, NAMES_BY_PLAIN.values())
         self.assertNotIn(None, WORDS_BY_PLAIN.values())
         self.assertEqual(len(VOCABULARY), len(set(VOCABULARY)))
+
+
+
+class QuickAddListTests(unittest.TestCase):
+    def test_original_telegram_order_is_kept_for_open_menus(self):
+        self.assertEqual(STAPLES[:3], ("Duz", "Bitki yağı", "Kərə yağı"))
+        self.assertEqual(STAPLES[19], "Qarabaşaq")
+
+    def test_groups_cover_every_staple_once_and_all_are_known(self):
+        grouped = [name for _, items in QUICK_GROUPS for name in items]
+        self.assertEqual(len(grouped), len(set(grouped)))
+        self.assertEqual(set(grouped), set(STAPLES))
+        self.assertTrue(set(POPULAR) <= set(STAPLES))
+        self.assertTrue(all(ingredient_key(name) in KNOWN for name in STAPLES))
+        self.assertGreaterEqual(len(STAPLES), 40)
 
 
 if __name__ == "__main__":
